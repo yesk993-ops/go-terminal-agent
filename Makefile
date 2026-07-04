@@ -1,4 +1,4 @@
-GO ?= /usr/lib/go-1.26/bin/go
+GO ?= go
 GOPATH ?= $(shell $(GO) env GOPATH)
 BIN_DIR ?= $(GOPATH)/bin
 
@@ -60,8 +60,8 @@ setup:
 	@echo "Then create an alias in ~/.bash_aliases or ~/.zshrc:"
 	@echo "  go() {"
 	@echo "    case \$$1 in"
-	@echo "      build|run|test|mod|get|install|clean|vet|fmt|doc|env|version|help|work|tool|list|generate|fix|cover)"
-	@echo "        /usr/lib/go-1.26/bin/go \"\$$@\""  # forward to real Go
+@echo "      build|run|test|mod|get|install|clean|vet|fmt|doc|env|version|help|work|tool|list|generate|fix|cover)"
+		@echo "        go \"\$$@\""  # forward to real Go
 	@echo "        ;;"
 	@echo "      *)"
 	@echo '        ai-agent --config "$$HOME/.config/agent/config.yaml" "$$@"'  # AI mode

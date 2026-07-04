@@ -5,7 +5,7 @@
 set -e
 
 AGENT_BIN="/usr/local/bin/ai-agent"
-REAL_GO="/usr/lib/go-1.26/bin/go"
+REAL_GO="/usr/bin/go"
 CONFIG_DIR="${HOME}/.config/agent"
 
 # Known Go compiler subcommands — forward these to real Go

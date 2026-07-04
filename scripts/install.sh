@@ -11,7 +11,7 @@ PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 AGENT_BIN="/usr/local/bin/ai-agent"
 GO_WRAPPER="/usr/local/bin/go"
 CONFIG_DIR="${HOME}/.config/agent"
-REAL_GO="${REAL_GO:-/usr/lib/go-1.26/bin/go}"
+REAL_GO="${REAL_GO:-/usr/bin/go}"
 
 echo "==> Building AI agent..."
 cd "$PROJECT_DIR"
