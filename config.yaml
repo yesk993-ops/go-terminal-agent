@@ -1,0 +1,47 @@
+provider:
+  default: nvidia
+  max_tokens: 4096
+  temperature: 0.7
+
+providers:
+  openai:
+    api_key: "${OPENAI_API_KEY}"
+    model: gpt-4o
+  anthropic:
+    api_key: "${ANTHROPIC_API_KEY}"
+    model: claude-sonnet-4-20250514
+  gemini:
+    api_key: "${GEMINI_API_KEY}"
+    model: gemini-2.5-pro
+  groq:
+    api_key: "${GROQ_API_KEY}"
+    model: llama-3.3-70b-versatile
+  nvidia:
+    api_key: "${NVIDIA_API_KEY}"
+    model: meta/llama-3.1-8b-instruct
+  openrouter:
+    api_key: "${OPENROUTER_API_KEY}"
+    model: openrouter/auto
+
+ui:
+  theme: catppuccin-mocha
+  syntax_theme: catppuccin-mocha
+  show_tokens: false
+  show_cost: true
+  max_history_ui: 50
+
+session:
+  max_messages: 100
+  max_age: 24h
+  auto_save: true
+  save_path: "~/.local/share/agent/sessions"
+
+cache:
+  enabled: true
+  max_size: 500
+  default_ttl: 5m
+
+logging:
+  level: info
+  format: text
+  output: stderr

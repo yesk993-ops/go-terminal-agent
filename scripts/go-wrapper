@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Smart wrapper: routes AI prompts to the agent, Go compiler commands to real Go.
+# Install: sudo make install  (or)  sudo ./scripts/install.sh
+
+set -e
+
+AGENT_BIN="/usr/local/bin/ai-agent"
+REAL_GO="/usr/lib/go-1.26/bin/go"
+CONFIG_DIR="${HOME}/.config/agent"
+
+# Known Go compiler subcommands — forward these to real Go
+GO_COMMANDS=(
+    build run test vet fmt doc fix generate
+    mod mod init mod tidy mod download mod verify mod why mod edit mod graph mod vendor
+    get install clean work env version help
+    tool cover prof
+    list
+)
+
+is_go_command() {
+    local cmd="$1"
+    for gocmd in "${GO_COMMANDS[@]}"; do
+        if [ "$cmd" = "$gocmd" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+main() {
+    if [ $# -eq 0 ]; then
+        exec "$AGENT_BIN"
+    fi
+
+    if is_go_command "$1"; then
+        exec "$REAL_GO" "$@"
+    fi
+
+    exec "$AGENT_BIN" --config "$CONFIG_DIR/config.yaml" "$@"
+}
+
+main "$@"
