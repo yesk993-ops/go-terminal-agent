@@ -3,10 +3,13 @@ package tui
 import "github.com/charmbracelet/lipgloss"
 
 var (
-	subtle = lipgloss.AdaptiveColor{Light: "#D9DCCF", Dark: "#383838"}
+	subtle    = lipgloss.AdaptiveColor{Light: "#D9DCCF", Dark: "#383838"}
+	highlight = lipgloss.AdaptiveColor{Light: "#874BFD", Dark: "#7B59F0"}
 
 	AppStyle = lipgloss.NewStyle().
-			Padding(1, 2)
+			Padding(1, 2).
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(highlight)
 
 	TitleStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#FFFFFF")).
