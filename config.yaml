@@ -1,8 +1,21 @@
+# ─── Default provider ───────────────────────────────────────────────
+# Change 'nvidia' to any provider name listed below.
+# Free / most reliable: nvidia (meta/llama-3.1-8b-instruct)
 provider:
   default: nvidia
   max_tokens: 4096
   temperature: 0.7
 
+# ─── API Keys ────────────────────────────────────────────────────────
+# Set via environment variables (recommended — no secrets in files):
+#   export NVIDIA_API_KEY="nvapi-..."
+#   export GROQ_API_KEY="gsk_..."
+#   export OPENAI_API_KEY="sk-..."
+#   export ANTHROPIC_API_KEY="sk-ant-..."
+#   export GEMINI_API_KEY="AIza..."
+#   export OPENROUTER_API_KEY="sk-or-..."
+#
+# Or paste keys directly below (uncomment and replace the values):
 providers:
   openai:
     api_key: "${OPENAI_API_KEY}"

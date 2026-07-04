@@ -85,7 +85,16 @@ main() {
   printf "    \033[36mgo what is docker\033[0m      Ask a question\n"
   printf "    \033[36mgo build ./...\033[0m          Real Go compiler passthrough\n"
   printf "\n"
-  printf "  Set API keys in: \033[33m%s/config.yaml\033[0m\n" "$CONFIG_DIR"
+  printf "  Set at least one API key (choose one):\n"
+  printf "    \033[33mexport NVIDIA_API_KEY=\"\033[36mnvapi-...\033[33m\"\033[0m    # free, reliable\n"
+  printf "    \033[33mexport GROQ_API_KEY=\"\033[36mgsk_...\033[33m\"\033[0m          # free tier\n"
+  printf "    \033[33mexport OPENAI_API_KEY=\"\033[36msk-...\033[33m\"\033[0m        # paid\n"
+  printf "    \033[33mexport ANTHROPIC_API_KEY=\"\033[36msk-ant-...\033[33m\"\033[0m  # paid\n"
+  printf "    \033[33mexport GEMINI_API_KEY=\"\033[36mAIza...\033[33m\"\033[0m        # free tier\n"
+  printf "    \033[33mexport OPENROUTER_API_KEY=\"\033[36msk-or-...\033[33m\"\033[0m  # paid\n"
+  printf "\n"
+  printf "  Or edit config:\n"
+  printf "    \033[33m%s/config.yaml\033[0m\n" "$CONFIG_DIR"
   printf "\n"
 }
 
