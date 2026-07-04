@@ -97,9 +97,12 @@ clone_repo() {
 
 build_agent() {
   info "Building AI agent (CGO_ENABLED=0 for cross-platform compat)..."
+  local tmp_bin
+  tmp_bin=$(mktemp)
   cd "$INSTALL_DIR"
-  CGO_ENABLED=0 go build -ldflags="-s -w" -o ai-agent ./cmd/agent
-  $SUDO install -m 755 ai-agent "$AGENT_BIN"
+  CGO_ENABLED=0 go build -ldflags="-s -w" -o "$tmp_bin" ./cmd/agent
+  $SUDO install -m 755 "$tmp_bin" "$AGENT_BIN"
+  rm -f "$tmp_bin"
   ok "Binary installed at $AGENT_BIN"
 }
 
