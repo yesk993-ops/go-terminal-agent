@@ -13,9 +13,9 @@ GO_WRAPPER="/usr/local/bin/go"
 CONFIG_DIR="${HOME}/.config/agent"
 REAL_GO="${REAL_GO:-/usr/bin/go}"
 
-echo "==> Building AI agent..."
+echo "==> Building AI agent (CGO_ENABLED=0)..."
 cd "$PROJECT_DIR"
-go build -ldflags="-s -w" -o ai-agent ./cmd/agent
+CGO_ENABLED=0 go build -ldflags="-s -w" -o ai-agent ./cmd/agent
 echo "==> Installing ai-agent binary to $AGENT_BIN..."
 install -m 755 ai-agent "$AGENT_BIN"
 rm -f ai-agent

@@ -11,16 +11,16 @@ BUILD_FLAGS = -ldflags="-s -w -X main.version=$(VERSION)"
 all: clean test build
 
 build:
-	$(GO) build $(BUILD_FLAGS) -o $(APP_NAME) ./cmd/agent
+	CGO_ENABLED=0 $(GO) build $(BUILD_FLAGS) -o $(APP_NAME) ./cmd/agent
 
 build-linux:
-	GOOS=linux GOARCH=amd64 $(GO) build $(BUILD_FLAGS) -o $(APP_NAME)-linux-amd64 ./cmd/agent
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build $(BUILD_FLAGS) -o $(APP_NAME)-linux-amd64 ./cmd/agent
 
 build-darwin:
-	GOOS=darwin GOARCH=amd64 $(GO) build $(BUILD_FLAGS) -o $(APP_NAME)-darwin-amd64 ./cmd/agent
+	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 $(GO) build $(BUILD_FLAGS) -o $(APP_NAME)-darwin-amd64 ./cmd/agent
 
 build-windows:
-	GOOS=windows GOARCH=amd64 $(GO) build $(BUILD_FLAGS) -o $(APP_NAME)-windows-amd64.exe ./cmd/agent
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $(GO) build $(BUILD_FLAGS) -o $(APP_NAME)-windows-amd64.exe ./cmd/agent
 
 build-all: build-linux build-darwin build-windows
 
@@ -34,10 +34,10 @@ lint:
 	$(GO) vet ./...
 
 run: build
-	./$(APP_NAME)
+	CGO_ENABLED=0 ./$(APP_NAME)
 
 run-dev:
-	$(GO) run ./cmd/agent
+	CGO_ENABLED=0 $(GO) run ./cmd/agent
 
 # Install the AI agent as the system `go` command
 install:
@@ -46,7 +46,7 @@ install:
 # Quick setup without sudo (installs to ~/.local/bin)
 setup:
 	@echo "==> Building AI agent..."
-	$(GO) build -ldflags="-s -w" -o $(APP_NAME) ./cmd/agent
+	CGO_ENABLED=0 $(GO) build -ldflags="-s -w" -o $(APP_NAME) ./cmd/agent
 	@mkdir -p "$(HOME)/.local/bin" "$(HOME)/.config/agent"
 	@install -m 755 $(APP_NAME) "$(HOME)/.local/bin/ai-agent"
 	@if [ ! -f "$(HOME)/.config/agent/config.yaml" ]; then \
