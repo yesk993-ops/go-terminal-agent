@@ -47,15 +47,30 @@ clone_repo() {
 build_agent() {
   info "Building AI agent (CGO_ENABLED=0)..."
   cd "$INSTALL_DIR"
-  CGO_ENABLED=0 go build -ldflags="-s -w" -o "$AGENT_BIN" ./cmd/agent
-  chmod 755 "$AGENT_BIN"
+  CGO_ENABLED=0 go build -ldflags="-s -w" -o ai-agent ./cmd/agent
+  $SUDO install -m 755 ai-agent "$AGENT_BIN"
+  rm -f ai-agent
   ok "Binary installed at $AGENT_BIN"
 }
 
 install_wrapper() {
   info "Installing go wrapper..."
   local real_go
-  real_go=$(command -v go)
+  real_go=$(command -v go || true)
+  if [ -z "$real_go" ] || [ "$real_go" = "$GO_WRAPPER" ]; then
+    for d in /usr/lib/go*/bin /usr/local/go/bin /usr/local/lib/go*/bin; do
+      for f in "$d/go"; do
+        if [ -x "$f" ] && [ "$f" != "$GO_WRAPPER" ]; then
+          real_go="$f"
+          break 2
+        fi
+      done
+    done
+  fi
+  if [ -z "$real_go" ] || [ "$real_go" = "$GO_WRAPPER" ]; then
+    real_go="/usr/bin/go"
+  fi
+  info "Real Go compiler: $real_go"
   sed "s|REAL_GO=\"/usr/bin/go\"|REAL_GO=\"$real_go\"|" \
     "$INSTALL_DIR/scripts/go-wrapper" > /tmp/go-wrapper-install
   $SUDO install -m 755 /tmp/go-wrapper-install "$GO_WRAPPER"
