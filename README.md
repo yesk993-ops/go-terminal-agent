@@ -94,7 +94,7 @@ File: `~/.config/agent/config.yaml`
 
 | Provider | Model | API Key |
 |---|---|---|
-| NVIDIA | meta/llama-3.1-8b-instruct (default) | `nvapi-...` |
+| NVIDIA | meta/llama-3.1-8b-instruct (default) or qwen/qwen3.5-122b-a10b | `nvapi-...` |
 | OpenAI | gpt-4o | `sk-...` |
 | Anthropic | claude-sonnet-4-20250514 | `sk-ant-...` |
 | Google Gemini | gemini-2.5-pro | `AIza...` |

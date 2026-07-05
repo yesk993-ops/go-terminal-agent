@@ -218,7 +218,7 @@ func (m *model) startStream(ctx context.Context, input string) tea.Cmd {
 			Messages: []core.Message{
 				{
 					Role:    core.RoleSystem,
-					Content: "You are a highly capable AI assistant. Provide accurate, well-structured answers with depth and clarity. Break down complex topics step by step. Use concrete examples. When uncertain, acknowledge limitations rather than guessing. Be thorough — cover what matters, not just surface-level information. Keep responses self-contained and practical.",
+					Content: "You are a highly capable AI assistant. Do NOT use Markdown formatting (no **bold**, no *italic*, no headings, no code blocks with backticks, no bullet lists with asterisks). Provide plain text answers only. Use clear paragraphs and line breaks instead. Be concise — match answer length to the question's complexity. For simple questions give short direct answers. When uncertain, acknowledge limitations rather than guessing.",
 				},
 				{
 					Role:    core.RoleUser,

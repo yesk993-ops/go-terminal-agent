@@ -31,7 +31,9 @@ func (p *nvidiaProvider) Stream(ctx context.Context, req *core.Request) (<-chan 
 		"max_tokens":  maxTokens,
 		"temperature": 1.0,
 		"top_p":       1.0,
-		"seed":        42,
+	}
+	for k, v := range req.Options {
+		chatReq[k] = v
 	}
 
 	if len(req.Tools) > 0 {

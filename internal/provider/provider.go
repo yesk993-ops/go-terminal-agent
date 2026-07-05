@@ -31,17 +31,15 @@ func Register(name string, factory Factory) {
 }
 
 func Get(name string, cfg core.ProviderConfig) core.Provider {
-	mu.RLock()
-	if p, ok := providers[name]; ok {
-		mu.RUnlock()
-		return p
+	cacheKey := name
+	if cfg.Model != "" {
+		cacheKey = name + ":" + cfg.Model
 	}
-	mu.RUnlock()
 
 	mu.Lock()
 	defer mu.Unlock()
 
-	if p, ok := providers[name]; ok {
+	if p, ok := providers[cacheKey]; ok {
 		return p
 	}
 
@@ -51,7 +49,7 @@ func Get(name string, cfg core.ProviderConfig) core.Provider {
 	}
 
 	p := factory(cfg)
-	providers[name] = p
+	providers[cacheKey] = p
 	return p
 }
 

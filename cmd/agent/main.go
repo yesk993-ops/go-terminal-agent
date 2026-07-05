@@ -11,8 +11,6 @@ import (
 	"strings"
 	"syscall"
 
-	"golang.org/x/term"
-
 	"github.com/agent/ai-terminal/internal/agent"
 	"github.com/agent/ai-terminal/internal/cache"
 	"github.com/agent/ai-terminal/internal/config"
@@ -22,6 +20,7 @@ import (
 	"github.com/agent/ai-terminal/internal/session"
 	"github.com/agent/ai-terminal/internal/tui"
 	tea "github.com/charmbracelet/bubbletea"
+	"golang.org/x/term"
 )
 
 func main() {
@@ -156,56 +155,6 @@ func setupProvider(providerName string, cfg *core.Config, modelFlag string) core
 	return provider.Get(providerName, resolveProviderConfig(cfg, providerName, modelFlag))
 }
 
-func stripMarkdown(s string) string {
-	var b strings.Builder
-	for i := 0; i < len(s); i++ {
-		if i+1 < len(s) && s[i] == '*' && s[i+1] == '*' {
-			if i > 0 && s[i-1] >= '0' && s[i-1] <= '9' {
-				b.WriteByte(s[i])
-				continue
-			}
-			if i+2 < len(s) && s[i+2] >= '0' && s[i+2] <= '9' {
-				b.WriteByte(s[i])
-				continue
-			}
-			j := i + 2
-			matched := false
-			for j+1 < len(s) && !(s[j] == '*' && s[j+1] == '*') {
-				b.WriteByte(s[j])
-				j++
-			}
-			if j+1 < len(s) {
-				i = j + 1
-				matched = true
-			}
-			if matched {
-				continue
-			}
-		}
-		if s[i] == '*' && (i == 0 || s[i-1] == ' ' || s[i-1] == '\n') {
-			if i+1 < len(s) && s[i+1] == ' ' {
-				b.WriteByte(s[i])
-				continue
-			}
-			j := i + 1
-			matched := false
-			for j < len(s) && s[j] != '*' && s[j] != '\n' {
-				b.WriteByte(s[j])
-				j++
-			}
-			if j < len(s) && s[j] == '*' {
-				i = j
-				matched = true
-			}
-			if matched {
-				continue
-			}
-		}
-		b.WriteByte(s[i])
-	}
-	return b.String()
-}
-
 func stripEmojis(s string) string {
 	var b strings.Builder
 	for _, r := range s {
@@ -226,88 +175,17 @@ func stripEmojis(s string) string {
 	return b.String()
 }
 
-func wrapLine(line string, maxWidth int) string {
-	if len(line) <= maxWidth {
-		return line
+func getTerminalWidth() int {
+	if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil {
+		return w
 	}
-
-	words := strings.Fields(line)
-	if len(words) == 0 {
-		return line
-	}
-
-	var out strings.Builder
-	var cur strings.Builder
-	curLen := 0
-
-	flush := func() {
-		if cur.Len() > 0 {
-			trimmed := strings.TrimRight(cur.String(), " ")
-			if out.Len() > 0 {
-				out.WriteByte('\n')
-			}
-			out.WriteString(trimmed)
-			cur.Reset()
-			curLen = 0
-		}
-	}
-
-	for _, word := range words {
-		if curLen+len(word)+1 > maxWidth && curLen > 0 {
-			flush()
-		}
-		if curLen > 0 {
-			cur.WriteByte(' ')
-			curLen++
-		}
-		cur.WriteString(word)
-		curLen += len(word)
-	}
-	flush()
-
-	return out.String()
-}
-
-func terminalWidth(fd int) int {
-	w, _, err := term.GetSize(fd)
-	if err != nil || w < 40 {
-		return 80
-	}
-	return w - 1
+	return 80
 }
 
 func renderAnswer(s string) string {
 	s = stripEmojis(s)
 	s = strings.TrimSpace(s)
-
-	width := terminalWidth(int(os.Stdout.Fd()))
-
-	lines := strings.Split(s, "\n")
-	var wrapped []string
-	for _, l := range lines {
-		line := l
-		if strings.HasPrefix(line, "### ") {
-			line = "\033[35m" + strings.TrimPrefix(line, "### ") + "\033[39m"
-		} else if strings.HasPrefix(line, "## ") {
-			line = "\033[35m" + strings.TrimPrefix(line, "## ") + "\033[39m"
-		} else if strings.HasPrefix(line, "# ") {
-			line = "\033[35m" + strings.TrimPrefix(line, "# ") + "\033[39m"
-		} else {
-			line = stripMarkdown(line)
-		}
-		w := wrapLine(line, width)
-		if strings.Contains(w, "\n") {
-			wrapped = append(wrapped, strings.Split(w, "\n")...)
-		} else {
-			wrapped = append(wrapped, w)
-		}
-	}
-
-	var out strings.Builder
-	for _, l := range wrapped {
-		out.WriteString(l + "\n")
-	}
-	return out.String()
+	return s
 }
 
 func runOnce(ag core.Agent, prompt string, w io.Writer) error {
@@ -318,7 +196,7 @@ func runOnce(ag core.Agent, prompt string, w io.Writer) error {
 		Messages: []core.Message{
 			{
 				Role:    core.RoleSystem,
-				Content: "You are a highly capable AI assistant. Provide accurate, well-structured answers with depth and clarity. Break down complex topics step by step. Use concrete examples. When uncertain, acknowledge limitations rather than guessing. Be thorough — cover what matters, not just surface-level information. Keep responses self-contained and practical.",
+				Content: "You are a highly capable AI assistant. Do NOT use Markdown formatting (no **bold**, no *italic*, no headings, no code blocks with backticks, no bullet lists with asterisks). Provide plain text answers only. Use clear paragraphs and line breaks instead. Be concise — match answer length to the question's complexity. For simple questions give short direct answers. When uncertain, acknowledge limitations rather than guessing.",
 			},
 			{
 				Role:    core.RoleUser,
@@ -351,6 +229,7 @@ func runOnce(ag core.Agent, prompt string, w io.Writer) error {
 	}
 
 	rendered := renderAnswer(buf.String())
-	fmt.Fprint(w, rendered)
+	rendered = tui.AppStyle.Width(getTerminalWidth() - 4).Render(rendered)
+	fmt.Fprintln(w, rendered)
 	return nil
 }

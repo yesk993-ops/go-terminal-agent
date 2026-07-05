@@ -6,9 +6,20 @@ var (
 	subtle    = lipgloss.AdaptiveColor{Light: "#D9DCCF", Dark: "#383838"}
 	highlight = lipgloss.AdaptiveColor{Light: "#874BFD", Dark: "#7B59F0"}
 
+	MinimalBorder = lipgloss.Border{
+		Top:         "─",
+		Bottom:      "─",
+		Left:        " ",
+		Right:       " ",
+		TopLeft:     "╭",
+		TopRight:    "╮",
+		BottomLeft:  "╰",
+		BottomRight: "╯",
+	}
+
 	AppStyle = lipgloss.NewStyle().
-			Padding(1, 2).
-			Border(lipgloss.RoundedBorder()).
+			Padding(0, 1).
+			Border(MinimalBorder).
 			BorderForeground(highlight)
 
 	TitleStyle = lipgloss.NewStyle().
