@@ -2,7 +2,6 @@ package provider
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/agent/ai-terminal/internal/core"
 )
@@ -20,29 +19,27 @@ func init() {
 }
 
 func (p *openRouterProvider) Stream(ctx context.Context, req *core.Request) (<-chan core.Token, error) {
+	temperature := 0.7
+	if t, ok := req.Options["temperature"]; ok {
+		temperature = toFloat64(t)
+	}
+
 	chatReq := map[string]any{
 		"model":       p.model,
 		"messages":    convertMessages(req.Messages),
 		"stream":      true,
 		"max_tokens":  req.MaxTokens,
-		"temperature": 0.7,
+		"temperature": temperature,
+	}
+
+	for k, v := range req.Options {
+		if k != "temperature" {
+			chatReq[k] = v
+		}
 	}
 
 	if len(req.Tools) > 0 {
-		tools := make([]map[string]any, 0, len(req.Tools))
-		for _, t := range req.Tools {
-			var schema map[string]any
-			_ = json.Unmarshal(t.InputSchema, &schema)
-			tools = append(tools, map[string]any{
-				"type": "function",
-				"function": map[string]any{
-					"name":        t.Name,
-					"description": t.Description,
-					"parameters":  schema,
-				},
-			})
-		}
-		chatReq["tools"] = tools
+		chatReq["tools"] = convertTools(req.Tools)
 	}
 
 	headers := map[string]string{

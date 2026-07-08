@@ -2,50 +2,120 @@ package provider
 
 import (
 	"context"
+	"fmt"
 	"strings"
+	"time"
 
 	"github.com/agent/ai-terminal/internal/core"
 	"github.com/agent/ai-terminal/internal/logger"
 )
 
+// fallbackProvider tries a list of providers in order.
+// Each provider gets up to 3 retries with backoff on rate-limit errors
+// before falling through to the next provider in the chain.
 type fallbackProvider struct {
-	primary   core.Provider
-	secondary core.Provider
+	providers []core.Provider
 }
 
-func NewFallback(primary, secondary core.Provider) core.Provider {
-	return &fallbackProvider{
-		primary:   primary,
-		secondary: secondary,
-	}
+func NewFallback(primary core.Provider, fallbacks ...core.Provider) core.Provider {
+	all := make([]core.Provider, 0, 1+len(fallbacks))
+	all = append(all, primary)
+	all = append(all, fallbacks...)
+	return &fallbackProvider{providers: all}
 }
 
 func (f *fallbackProvider) Name() string {
-	return f.primary.Name() + "+" + f.secondary.Name()
+	names := make([]string, len(f.providers))
+	for i, p := range f.providers {
+		names[i] = p.Name()
+	}
+	return strings.Join(names, "→")
 }
 
 func (f *fallbackProvider) Stream(ctx context.Context, req *core.Request) (<-chan core.Token, error) {
-	ch, err := f.primary.Stream(ctx, req)
-	if err == nil {
-		return ch, nil
-	}
+	for idx, prov := range f.providers {
+		if idx > 0 {
+			// We're falling back — send status token to user
+			prevName := f.providers[idx-1].Name()
+			logger.L().Warn("falling back",
+				"from", prevName,
+				"to", prov.Name())
+		}
 
-	if isRateLimitError(err) {
-		logger.L().Warn("primary provider rate limited, falling back",
-			"primary", f.primary.Name(),
+		// Retry up to 3 times on rate-limit errors
+		ch, err := f.tryWithRetry(ctx, prov, req)
+		if err == nil {
+			if idx == 0 {
+				return ch, nil
+			}
+			// Need to wrap with status message
+			out := make(chan core.Token, 64)
+			go func(prev, curr string, in <-chan core.Token) {
+				defer close(out)
+				out <- core.Token{
+					Content: fmt.Sprintf("\n[Unavailable: %s, switching to %s...]\n", prev, curr),
+				}
+				for tok := range in {
+					out <- tok
+				}
+			}(f.providers[idx-1].Name(), prov.Name(), ch)
+			return out, nil
+		}
+
+		// If it's not a retryable error, don't try other providers
+		if !isRetryableError(err) {
+			return nil, err
+		}
+
+		// Rate limited — continue to next provider
+		logger.L().Warn("rate limited, trying next provider",
+			"provider", prov.Name(),
 			"error", err.Error())
-
-		return f.secondary.Stream(ctx, req)
 	}
 
-	return nil, err
+	return nil, fmt.Errorf("all providers unavailable")
 }
 
-func isRateLimitError(err error) bool {
+func (f *fallbackProvider) tryWithRetry(ctx context.Context, prov core.Provider, req *core.Request) (<-chan core.Token, error) {
+	var lastErr error
+	for attempt := 0; attempt <= 3; attempt++ {
+		ch, err := prov.Stream(ctx, req)
+		if err == nil {
+			return ch, nil
+		}
+		lastErr = err
+		if !isRetryableError(err) {
+			return nil, err
+		}
+		if attempt < 3 {
+			backoff := time.Duration(1+attempt*2) * time.Second
+			logger.L().Warn("retryable error, retrying",
+				"provider", prov.Name(),
+				"attempt", attempt+1,
+				"backoff", backoff,
+				"error", err.Error())
+			select {
+			case <-time.After(backoff):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+	}
+	return nil, lastErr
+}
+
+// isRetryableError returns true for errors that should trigger a fallback
+// to the next provider: rate limits, quota exhaustion, insufficient credits,
+// and temporary upstream failures.
+func isRetryableError(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "429") ||
+		strings.Contains(msg, "402") ||
 		strings.Contains(msg, "rate_limit") ||
 		strings.Contains(msg, "rate limit") ||
 		strings.Contains(msg, "too many requests") ||
-		strings.Contains(msg, "insufficient_quota")
+		strings.Contains(msg, "insufficient_quota") ||
+		strings.Contains(msg, "insufficient credits") ||
+		strings.Contains(msg, "upstream") ||
+		strings.Contains(msg, "temporarily")
 }

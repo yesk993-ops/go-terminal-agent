@@ -62,10 +62,12 @@ func (p *geminiProvider) Stream(ctx context.Context, req *core.Request) (<-chan 
 		}
 	}
 
-	url := fmt.Sprintf("%s/models/%s:streamGenerateContent?alt=sse&key=%s",
-		p.baseURL, p.model, p.apiKey)
+	url := fmt.Sprintf("%s/models/%s:streamGenerateContent?alt=sse",
+		p.baseURL, p.model)
 
-	resp, err := p.doPost(ctx, url, chatReq, nil)
+	resp, err := p.doPost(ctx, url, chatReq, map[string]string{
+		"X-Goog-Api-Key": p.apiKey,
+	})
 	if err != nil {
 		return nil, err
 	}

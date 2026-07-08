@@ -2,7 +2,6 @@ package provider
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/agent/ai-terminal/internal/core"
 )
@@ -24,33 +23,29 @@ func (p *nvidiaProvider) Stream(ctx context.Context, req *core.Request) (<-chan 
 	if maxTokens <= 0 {
 		maxTokens = 16384
 	}
-	chatReq := map[string]any{
-		"model":       p.model,
-		"messages":    convertMessages(req.Messages),
-		"stream":      true,
-		"max_tokens":  maxTokens,
-		"temperature": 1.0,
-		"top_p":       1.0,
-	}
-	for k, v := range req.Options {
-		chatReq[k] = v
+
+	temperature := 1.0
+	if t, ok := req.Options["temperature"]; ok {
+		temperature = toFloat64(t)
 	}
 
-	if len(req.Tools) > 0 {
-		tools := make([]map[string]any, 0, len(req.Tools))
-		for _, t := range req.Tools {
-			var schema map[string]any
-			_ = json.Unmarshal(t.InputSchema, &schema)
-			tools = append(tools, map[string]any{
-				"type": "function",
-				"function": map[string]any{
-					"name":        t.Name,
-					"description": t.Description,
-					"parameters":  schema,
-				},
-			})
+	chatReq := map[string]any{
+		"model":      p.model,
+		"messages":   convertMessages(req.Messages),
+		"stream":     true,
+		"max_tokens": maxTokens,
+	}
+
+	for k, v := range req.Options {
+		if k != "temperature" {
+			chatReq[k] = v
 		}
-		chatReq["tools"] = tools
+	}
+
+	chatReq["temperature"] = temperature
+
+	if len(req.Tools) > 0 {
+		chatReq["tools"] = convertTools(req.Tools)
 	}
 
 	resp, err := p.doPost(ctx, p.baseURL+"/chat/completions", chatReq, nil)

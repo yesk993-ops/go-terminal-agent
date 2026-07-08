@@ -67,13 +67,11 @@ func (s *sessionStore) Get(id string) (core.Session, bool) {
 
 func (s *sessionStore) GetOrCreate(id string) core.Session {
 	if sess, ok := s.Get(id); ok {
-		// trim to last N messages
 		msgs := sess.Messages()
 		if len(msgs) > s.maxMsg {
-			sess.Clear()
-			for _, m := range msgs[len(msgs)-s.maxMsg:] {
-				sess.Append(m)
-			}
+			trimmed := make([]core.Message, s.maxMsg)
+			copy(trimmed, msgs[len(msgs)-s.maxMsg:])
+			sess.Replace(trimmed)
 		}
 		return sess
 	}
@@ -151,16 +149,28 @@ func saveSessionTo(store *sessionStore, id string, messages []core.Message, meta
 		"metadata": metadata,
 	})
 	if err != nil {
+		logger.L().Warn("failed to marshal session", "id", id, "error", err)
 		return
 	}
 	path := filepath.Join(store.savePath, id+".json")
-	_ = os.WriteFile(path, data, 0644)
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		logger.L().Warn("failed to save session", "id", id, "path", path, "error", err)
+	}
+}
+
+func (s *session) Replace(msgs []core.Message) {
+	s.mu.Lock()
+	s.messages = msgs
+	s.mu.Unlock()
+	if s.store != nil && s.store.autoSave {
+		saveSessionTo(s.store, s.id, s.messages, s.metadata)
+	}
 }
 
 func (s *session) Clear() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.messages = s.messages[:0]
+	s.messages = make([]core.Message, 0, 64)
+	s.mu.Unlock()
 }
 
 func (s *session) SetMetadata(key, value string) {

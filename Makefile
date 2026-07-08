@@ -54,22 +54,21 @@ setup:
 		echo "Created $$HOME/.config/agent/config.yaml"; \
 	fi
 	@echo ""
+	@echo "=== AI Agent installed ==="
+	@echo ""
 	@echo "Add to your ~/.bashrc or ~/.zshrc:"
 	@echo "  export PATH=\"\$$HOME/.local/bin:\$$PATH\""
 	@echo ""
-	@echo "Then create an alias in ~/.bash_aliases or ~/.zshrc:"
-	@echo "  go() {"
-	@echo "    case \$$1 in"
-	@echo "      build|run|test|mod|get|install|clean|vet|fmt|doc|env|version|help|work|tool|list|generate|fix|cover)"
-		@echo "        go \"\$$@\""  # forward to real Go
-	@echo "        ;;"
-	@echo "      *)"
-	@echo '        ai-agent --config "$$HOME/.config/agent/config.yaml" "$$@"'  # AI mode
-	@echo "        ;;"
-	@echo "    esac"
-	@echo "  }"
+	@echo "Set at least one API key (choose one):"
+	@echo "  export NVIDIA_API_KEY=\"nvapi-...\"    # Free, recommended"
+	@echo "  export GROQ_API_KEY=\"gsk_...\"         # Free tier"
+	@echo "  export OPENROUTER_API_KEY=\"sk-or-...\" # Access to Claude, GPT-4o"
 	@echo ""
-	@echo "Reload your shell: source ~/.bashrc"
+	@echo "Usage:"
+	@echo "  go what is docker        AI assistant query"
+	@echo "  go build ./...           Real Go compiler (passthrough)"
+	@echo "  go                       Launch interactive TUI"
+	@echo "  go -h                    Show all options"
 
 clean:
 	rm -f $(APP_NAME) $(APP_NAME)-linux-amd64 $(APP_NAME)-darwin-amd64 $(APP_NAME)-windows-amd64.exe

@@ -1,23 +1,33 @@
-# ─── Default provider ───────────────────────────────────────────────
-# Change 'nvidia' to any provider name listed below.
-# Free / most reliable options:
-#   nvidia (meta/llama-3.1-8b-instruct) - faster, lower resource
-#   nvidia (qwen/qwen3.5-122b-a10b) - more powerful, higher quality
+# ─── Provider Configuration ────────────────────────────────────────
+# The AI agent uses LLM providers to generate responses. You can
+# configure multiple providers and switch between them at runtime.
+#
+# Default provider (change 'nvidia' to any name below):
+#   nvidia     - Free tier, works great. Use qwen3.5-122b-a10b for quality
+#   groq       - Free tier, fast inference on Llama/Mixtral models
+#   openrouter  - Access to Claude, GPT-4o, Gemini (may need credits)
+#   openai     - GPT-4o and other OpenAI models (paid)
+#   anthropic  - Claude models directly (paid)
+#   gemini     - Google's Gemini models (free tier available)
+#
 provider:
   default: nvidia
-  max_tokens: 4096
+  max_tokens: 8192
   temperature: 0.7
 
 # ─── API Keys ────────────────────────────────────────────────────────
-# Set via environment variables (recommended — no secrets in files):
-#   export NVIDIA_API_KEY="nvapi-..."    # For models: meta/llama-3.1-8b-instruct or qwen/qwen3.5-122b-a10b
-#   export GROQ_API_KEY="gsk_..."
-#   export OPENAI_API_KEY="sk-..."
-#   export ANTHROPIC_API_KEY="sk-ant-..."
-#   export GEMINI_API_KEY="AIza..."
-#   export OPENROUTER_API_KEY="sk-or-..."
+# Set via environment variables (recommended):
+#   export NVIDIA_API_KEY="nvapi-..."    # Free: nvapi key from build.nvidia.com
+#   export GROQ_API_KEY="gsk_..."        # Free: console.groq.com
+#   export OPENAI_API_KEY="sk-..."       # Paid: platform.openai.com
+#   export ANTHROPIC_API_KEY="sk-ant-..."# Paid: console.anthropic.com
+#   export GEMINI_API_KEY="AIza..."      # Free: aistudio.google.com
+#   export OPENROUTER_API_KEY="sk-or-..."# Pay-as-you-go: openrouter.ai/keys
 #
-# Or paste keys directly below (uncomment and replace the values):
+# Keys use ${ENV_VAR} syntax to read from environment.
+# To hardcode a key (not recommended for shared machines):
+#   api_key: "sk-your-key-here"
+#
 providers:
   openai:
     api_key: "${OPENAI_API_KEY}"
@@ -33,31 +43,48 @@ providers:
     model: llama-3.3-70b-versatile
   nvidia:
     api_key: "${NVIDIA_API_KEY}"
-    # Choose one: meta/llama-3.1-8b-instruct (default, faster) or qwen/qwen3.5-122b-a10b (more powerful)
-    model: qwen/qwen3.5-122b-a10b
+    # meta/llama-3.1-8b-instruct (fast) or qwen/qwen3.5-122b-a10b (high quality)
+    model: meta/llama-3.1-8b-instruct
   openrouter:
     api_key: "${OPENROUTER_API_KEY}"
-    model: openrouter/auto
+    # Free models on OpenRouter (no cost, no rate limits):
+    #   google/gemma-4-31b-it:free        (fast, good quality)
+    #   nvidia/nemotron-3-super:free       (chain-of-thought reasoning)
+    #   qwen/qwen3-coder:free              (excellent for coding)
+    #   meta-llama/llama-3.3-70b-instruct:free (strong general purpose)
+    # Paid models (high quality, ~$0.002/query):
+    #   anthropic/claude-sonnet-5
+    #   google/gemini-3.1-flash
+    #   qwen/qwen3.7-max
+    # Use "openrouter/auto" to let OpenRouter auto-select.
+    model: google/gemma-4-31b-it:free
 
+# ─── User Interface ────────────────────────────────────────────────
+# Customize the interactive terminal experience.
 ui:
   theme: catppuccin-mocha
   syntax_theme: catppuccin-mocha
-  show_tokens: false
-  show_cost: true
-  max_history_ui: 50
+  show_tokens: false          # Show token count per response
+  show_cost: true             # Estimate cost per response
+  max_history_ui: 50          # Messages visible in scrollback
 
+# ─── Session Management ────────────────────────────────────────────
+# Sessions preserve conversation history between queries.
 session:
-  max_messages: 100
-  max_age: 24h
-  auto_save: true
+  max_messages: 100           # Keep last N messages for context
+  max_age: 24h                # Discard sessions older than this
+  auto_save: true             # Persist sessions to disk
   save_path: "~/.local/share/agent/sessions"
 
+# ─── Response Caching ──────────────────────────────────────────────
+# Cache identical requests to reduce API calls.
 cache:
   enabled: true
-  max_size: 500
-  default_ttl: 5m
+  max_size: 500               # Max cached responses
+  default_ttl: 5m             # How long to keep cache entries
 
+# ─── Logging ───────────────────────────────────────────────────────
 logging:
-  level: info
-  format: text
-  output: stderr
+  level: info                 # debug | info | warn | error
+  format: text                # text | json
+  output: stderr              # stderr | stdout | <filepath>

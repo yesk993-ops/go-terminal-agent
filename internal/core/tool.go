@@ -14,10 +14,10 @@ const (
 )
 
 type ToolResult struct {
-	Status  ToolResultStatus `json:"status"`
-	Output  string           `json:"output"`
-	Error   string           `json:"error,omitempty"`
-	Data    json.RawMessage  `json:"data,omitempty"`
+	Status ToolResultStatus `json:"status"`
+	Output string           `json:"output"`
+	Error  string           `json:"error,omitempty"`
+	Data   json.RawMessage  `json:"data,omitempty"`
 }
 
 type Tool interface {

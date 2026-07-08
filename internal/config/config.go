@@ -73,7 +73,11 @@ func Load(path string) (*core.Config, error) {
 		}
 	}
 
-	_ = v.ReadInConfig()
+	if err := v.ReadInConfig(); err != nil {
+		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
+			return nil, fmt.Errorf("read config: %w", err)
+		}
+	}
 
 	providerConfigs := loadProviderConfigs(v)
 
@@ -122,15 +126,6 @@ func loadProviderConfigs(v *viper.Viper) []core.ProviderConfig {
 		"openrouter": "OPENROUTER_API_KEY",
 	}
 
-	modelDefaults := map[string]string{
-		"openai":     "gpt-4o",
-		"anthropic":  "claude-sonnet-4-20250514",
-		"gemini":     "gemini-2.5-pro",
-		"groq":       "llama-3.3-70b-versatile",
-		"nvidia":     "meta/llama-3.1-405b-instruct",
-		"openrouter": "openrouter/auto",
-	}
-
 	var configs []core.ProviderConfig
 
 	for name, envKey := range envMappings {
@@ -139,7 +134,7 @@ func loadProviderConfigs(v *viper.Viper) []core.ProviderConfig {
 			apiKey = v.GetString(fmt.Sprintf("providers.%s.api_key", name))
 		}
 
-		model := modelDefaults[name]
+		model := ""
 		if v.IsSet(fmt.Sprintf("providers.%s.model", name)) {
 			model = v.GetString(fmt.Sprintf("providers.%s.model", name))
 		}

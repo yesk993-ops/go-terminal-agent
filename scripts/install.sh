@@ -10,8 +10,10 @@ set -e
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 AGENT_BIN="/usr/local/bin/ai-agent"
 GO_WRAPPER="/usr/local/bin/go"
-CONFIG_DIR="${HOME}/.config/agent"
-REAL_GO="${REAL_GO:-/usr/bin/go}"
+: "${SUDO_USER:=${USER}}"
+SUDO_HOME="$(getent passwd "${SUDO_USER}" 2>/dev/null | cut -d: -f6 || echo "${HOME}")"
+CONFIG_DIR="${SUDO_HOME}/.config/agent"
+REAL_GO="${REAL_GO:-$(command -v go 2>/dev/null || echo '/usr/bin/go')}"
 
 echo "==> Building AI agent (CGO_ENABLED=0)..."
 cd "$PROJECT_DIR"

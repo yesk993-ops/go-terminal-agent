@@ -227,8 +227,8 @@ func parseTextToolCall(content string, tools core.ToolRegistry) *core.ToolCall {
 		name := t.Name()
 
 		patterns := []struct {
-			prefix   string
-			suffix   string
+			prefix string
+			suffix string
 		}{
 			{"<function(" + name, "</function>"},
 			{"<function_" + name + ">", "</function>"},

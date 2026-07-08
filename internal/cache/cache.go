@@ -15,10 +15,10 @@ type entry struct {
 }
 
 type LRUCache struct {
-	mu       sync.RWMutex
-	items    map[string]*list.Element
-	order    *list.List
-	maxSize  int
+	mu         sync.RWMutex
+	items      map[string]*list.Element
+	order      *list.List
+	maxSize    int
 	defaultTTL time.Duration
 }
 
@@ -35,18 +35,11 @@ func New(maxSize int, defaultTTL time.Duration) *LRUCache {
 }
 
 func (c *LRUCache) Get(key string) (string, bool) {
-	c.mu.RLock()
-	elem, ok := c.items[key]
-	c.mu.RUnlock()
-	if !ok {
-		return "", false
-	}
-
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	elem = c.items[key]
-	if elem == nil {
+	elem, ok := c.items[key]
+	if !ok {
 		return "", false
 	}
 

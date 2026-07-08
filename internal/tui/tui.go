@@ -27,23 +27,37 @@ type errMsg struct {
 }
 
 type model struct {
-	agent      core.Agent
-	session    core.Session
-	provider   string
-	modelName  string
-	setCore    func(provider, model string) error
+	agent     core.Agent
+	session   core.Session
+	provider  string
+	modelName string
+	setCore   func(provider, model string) error
 
-	chat      []chatMsg
-	input     textinput.Model
-	spinner   spinner.Model
-	loading   bool
-	err       error
-	cancel    context.CancelFunc
-	ctx       context.Context
+	chat    []chatMsg
+	input   textinput.Model
+	spinner spinner.Model
+	loading bool
+	err     error
+	cancel  context.CancelFunc
+	ctx     context.Context
 
-	width     int
-	height    int
-	tokenCh   <-chan core.Token
+	width       int
+	height      int
+	tokenCh     <-chan core.Token
+	showThinking bool
+}
+
+var placeholderTexts = []string{
+	"Ask anything...",
+	"Pregunta lo que sea...",
+	"Posez votre question...",
+	"Fragen Sie alles...",
+	"Fai qualsiasi domanda...",
+	"何でも質問してください...",
+	"질문하세요...",
+	"询问任何问题...",
+	"Задайте вопрос...",
+	"Bir şey sor...",
 }
 
 func New(agent core.Agent, session core.Session, provider, modelName string, setCore func(provider, model string) error) tea.Model {
@@ -52,7 +66,7 @@ func New(agent core.Agent, session core.Session, provider, modelName string, set
 	s.Spinner = spinner.Dot
 
 	ti := textinput.New()
-	ti.Placeholder = "Ask anything..."
+	ti.Placeholder = placeholderTexts[0]
 	ti.Prompt = "> "
 	ti.Focus()
 	ti.CharLimit = 0
@@ -189,10 +203,10 @@ func (m *model) View() string {
 		switch msg.role {
 		case core.RoleUser:
 			b.WriteString(RenderUserMessage(msg.content))
-			b.WriteString("\n\n")
+			b.WriteString("\n")
 		case core.RoleAssistant:
 			b.WriteString(RenderAssistantMessage(msg.content))
-			b.WriteString("\n\n")
+			b.WriteString("\n")
 		}
 	}
 
@@ -205,7 +219,44 @@ func (m *model) View() string {
 	b.WriteString("\n")
 	b.WriteString(m.input.View())
 
-	return AppStyle.Render(b.String())
+	out := AppStyle.Render(b.String())
+	// Apply word wrapping to fit terminal width
+	width := m.width
+	if width > 4 {
+		width -= 4
+	}
+	if width > 0 {
+		out = wrapText(out, width)
+	}
+	return out
+}
+
+func wrapText(s string, width int) string {
+	var b strings.Builder
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		if len(line) <= width {
+			b.WriteString(line)
+			continue
+		}
+		for len(line) > 0 {
+			if len(line) <= width {
+				b.WriteString(line)
+				break
+			}
+			idx := strings.LastIndex(line[:width], " ")
+			if idx < 1 {
+				idx = width
+			}
+			b.WriteString(line[:idx])
+			b.WriteByte('\n')
+			line = line[idx:]
+		}
+	}
+	return b.String()
 }
 
 type streamStartedMsg struct {
@@ -214,11 +265,16 @@ type streamStartedMsg struct {
 
 func (m *model) startStream(ctx context.Context, input string) tea.Cmd {
 	return func() tea.Msg {
+		prompt := core.SystemPrompt
+		if m.showThinking {
+			prompt += "\n\nBefore answering, think step by step in a clear chain-of-thought. Show your reasoning inside <thinking>...</thinking> tags, then provide your final answer."
+		}
+
 		req := &core.Request{
 			Messages: []core.Message{
 				{
 					Role:    core.RoleSystem,
-					Content: "You are a highly capable AI assistant. Do NOT use Markdown formatting (no **bold**, no *italic*, no headings, no code blocks with backticks, no bullet lists with asterisks). Provide plain text answers only. Use clear paragraphs and line breaks instead. Be concise — match answer length to the question's complexity. For simple questions give short direct answers. When uncertain, acknowledge limitations rather than guessing.",
+					Content: prompt,
 				},
 				{
 					Role:    core.RoleUser,
@@ -311,7 +367,7 @@ func (m *model) handleCommand(input string) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "/help":
-		m.chat = append(m.chat, chatMsg{role: core.RoleAssistant, content: "Commands:\n  /provider <name>  - Switch provider (nvidia, groq, openai, etc.)\n  /model <name>     - Switch model\n  /help             - Show this help\n  /clear            - Clear chat\n  /status           - Show current provider/model"})
+		m.chat = append(m.chat, chatMsg{role: core.RoleAssistant, content: "Commands:\n  /provider <name>  - Switch provider (nvidia, groq, openai, etc.)\n  /model <name>     - Switch model\n  /think            - Toggle chain-of-thought reasoning\n  /clear            - Clear chat\n  /status           - Show current provider/model\n  /help             - Show this help\n  /exit, /quit      - Exit the program"})
 		return m, nil
 
 	case "/clear":
@@ -319,8 +375,24 @@ func (m *model) handleCommand(input string) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "/status":
-		m.chat = append(m.chat, chatMsg{role: core.RoleAssistant, content: fmt.Sprintf("Provider: %s\nModel: %s", m.provider, m.modelName)})
+		thinking := "off"
+		if m.showThinking {
+			thinking = "on"
+		}
+		m.chat = append(m.chat, chatMsg{role: core.RoleAssistant, content: fmt.Sprintf("Provider: %s\nModel: %s\nThinking: %s", m.provider, m.modelName, thinking)})
 		return m, nil
+
+	case "/think":
+		m.showThinking = !m.showThinking
+		status := "enabled"
+		if !m.showThinking {
+			status = "disabled"
+		}
+		m.chat = append(m.chat, chatMsg{role: core.RoleAssistant, content: fmt.Sprintf("Chain-of-thought thinking %s.", status)})
+		return m, nil
+
+	case "/exit", "/quit":
+		return m, tea.Quit
 
 	default:
 		m.chat = append(m.chat, chatMsg{role: core.RoleAssistant, content: fmt.Sprintf("Unknown command: %s\nType /help for available commands.", cmd)})

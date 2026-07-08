@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -116,6 +117,63 @@ func TestLRUCacheConcurrent(t *testing.T) {
 	}
 
 	for i := 0; i < 10; i++ {
+		<-done
+	}
+}
+
+func TestLRUCacheConcurrentGetDelete(t *testing.T) {
+	c := New(100, time.Minute)
+
+	for i := 0; i < 50; i++ {
+		c.Set(fmt.Sprintf("k%d", i), fmt.Sprintf("v%d", i), 0)
+	}
+
+	done := make(chan bool, 20)
+	for i := 0; i < 10; i++ {
+		go func() {
+			for j := 0; j < 50; j++ {
+				c.Get(fmt.Sprintf("k%d", j))
+			}
+			done <- true
+		}()
+	}
+	for i := 0; i < 10; i++ {
+		go func() {
+			for j := 0; j < 50; j++ {
+				c.Delete(fmt.Sprintf("k%d", j))
+			}
+			done <- true
+		}()
+	}
+
+	for i := 0; i < 20; i++ {
+		<-done
+	}
+}
+
+func TestLRUCacheConcurrentSetClear(t *testing.T) {
+	c := New(50, time.Minute)
+
+	done := make(chan bool, 20)
+	for i := 0; i < 10; i++ {
+		go func() {
+			for j := 0; j < 100; j++ {
+				c.Set(fmt.Sprintf("k%d", j%50), "v", 0)
+				c.Get(fmt.Sprintf("k%d", j%50))
+			}
+			done <- true
+		}()
+	}
+	for i := 0; i < 10; i++ {
+		go func() {
+			for j := 0; j < 10; j++ {
+				c.Clear()
+			}
+			done <- true
+		}()
+	}
+
+	for i := 0; i < 20; i++ {
 		<-done
 	}
 }

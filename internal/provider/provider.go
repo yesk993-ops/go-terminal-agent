@@ -86,9 +86,9 @@ func newBaseProvider(name, apiKey, model, baseURL string) baseProvider {
 		client: &http.Client{
 			Timeout: 120 * time.Second,
 			Transport: &http.Transport{
-				MaxIdleConns:        10,
-				IdleConnTimeout:     30 * time.Second,
-				DisableCompression:  false,
+				MaxIdleConns:       10,
+				IdleConnTimeout:    30 * time.Second,
+				DisableCompression: false,
 			},
 		},
 	}
@@ -158,9 +158,9 @@ type openAIChunk struct {
 }
 
 type accumulatedToolCall struct {
-	id       string
-	name     string
-	argsBuf  strings.Builder
+	id      string
+	name    string
+	argsBuf strings.Builder
 }
 
 func streamOpenAICompatibleSSE(ctx context.Context, resp *http.Response) (<-chan core.Token, error) {
@@ -431,6 +431,43 @@ func convertMessages(msgs []core.Message) []chatMessage {
 	return result
 }
 
+func toFloat64(v any) float64 {
+	switch val := v.(type) {
+	case float64:
+		return val
+	case float32:
+		return float64(val)
+	case int:
+		return float64(val)
+	case int64:
+		return float64(val)
+	case json.Number:
+		f, _ := val.Float64()
+		return f
+	default:
+		return 0.7
+	}
+}
+
+func convertTools(tools []core.ToolDef) []map[string]any {
+	out := make([]map[string]any, 0, len(tools))
+	for _, t := range tools {
+		var schema map[string]any
+		if err := json.Unmarshal(t.InputSchema, &schema); err != nil {
+			schema = map[string]any{}
+		}
+		out = append(out, map[string]any{
+			"type": "function",
+			"function": map[string]any{
+				"name":        t.Name,
+				"description": t.Description,
+				"parameters":  schema,
+			},
+		})
+	}
+	return out
+}
+
 func (b *baseProvider) doPost(ctx context.Context, url string, body any, extraHeaders map[string]string) (*http.Response, error) {
 	return doPostClient(ctx, url, b.apiKey, body, extraHeaders, b.client)
 }
@@ -454,6 +491,7 @@ func doPostClient(ctx context.Context, url, apiKey string, body any, extraHeader
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Cache-Control", "no-cache")
 	req.Header.Set("Connection", "keep-alive")
+	req.Header.Set("User-Agent", "go-terminal-agent/1.0")
 
 	if apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)

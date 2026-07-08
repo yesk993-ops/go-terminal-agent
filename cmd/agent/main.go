@@ -152,27 +152,25 @@ func resolveProviderConfig(cfg *core.Config, providerName, modelFlag string) cor
 }
 
 func setupProvider(providerName string, cfg *core.Config, modelFlag string) core.Provider {
-	return provider.Get(providerName, resolveProviderConfig(cfg, providerName, modelFlag))
-}
+	primary := provider.Get(providerName, resolveProviderConfig(cfg, providerName, modelFlag))
+	if primary == nil {
+		return nil
+	}
 
-func stripEmojis(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		switch {
-		case r >= 0x2600 && r <= 0x27BF,
-			r >= 0x1F300 && r <= 0x1FAFF,
-			r >= 0x2702 && r <= 0x27B0,
-			r >= 0x24C2 && r <= 0x1F251,
-			r == 0x200D, r == 0xFE0F, r == 0x2139,
-			r >= 0x2B05 && r <= 0x2B55,
-			r >= 0x2934 && r <= 0x2935,
-			r >= 0x25AA && r <= 0x25FE:
-			continue
-		default:
-			b.WriteRune(r)
+	// Build a fallback chain: try primary first (with retry), then fall
+	// through other providers if rate limited.
+	fallbackOrder := []string{"openrouter", "nvidia", "groq", "openai", "anthropic", "gemini"}
+	var fallbacks []core.Provider
+	for _, fb := range fallbackOrder {
+		if fb == providerName {
+			continue // skip primary
+		}
+		p := provider.Get(fb, resolveProviderConfig(cfg, fb, ""))
+		if p != nil {
+			fallbacks = append(fallbacks, p)
 		}
 	}
-	return b.String()
+	return provider.NewFallback(primary, fallbacks...)
 }
 
 func getTerminalWidth() int {
@@ -183,9 +181,26 @@ func getTerminalWidth() int {
 }
 
 func renderAnswer(s string) string {
-	s = stripEmojis(s)
 	s = strings.TrimSpace(s)
-	return s
+	width := getTerminalWidth() - 4
+	if width < 40 {
+		width = 40
+	}
+	var b strings.Builder
+	for _, line := range strings.Split(s, "\n") {
+		for len(line) > width {
+			idx := strings.LastIndex(line[:width], " ")
+			if idx < 1 {
+				idx = width
+			}
+			b.WriteString(line[:idx])
+			b.WriteByte('\n')
+			line = strings.TrimSpace(line[idx:])
+		}
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	return b.String()
 }
 
 func runOnce(ag core.Agent, prompt string, w io.Writer) error {
@@ -196,7 +211,7 @@ func runOnce(ag core.Agent, prompt string, w io.Writer) error {
 		Messages: []core.Message{
 			{
 				Role:    core.RoleSystem,
-				Content: "You are a highly capable AI assistant. Do NOT use Markdown formatting (no **bold**, no *italic*, no headings, no code blocks with backticks, no bullet lists with asterisks). Provide plain text answers only. Use clear paragraphs and line breaks instead. Be concise — match answer length to the question's complexity. For simple questions give short direct answers. When uncertain, acknowledge limitations rather than guessing.",
+				Content: core.SystemPrompt,
 			},
 			{
 				Role:    core.RoleUser,
@@ -204,7 +219,7 @@ func runOnce(ag core.Agent, prompt string, w io.Writer) error {
 			},
 		},
 		Stream:    true,
-		MaxTokens: 4096,
+		MaxTokens: 8192,
 	}
 
 	ch, err := ag.Run(ctx, req)

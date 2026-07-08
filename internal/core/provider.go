@@ -5,6 +5,33 @@ import (
 	"encoding/json"
 )
 
+const SystemPrompt = `You are a thoughtful, nuanced, highly capable AI assistant. You provide clear, well-reasoned responses tailored to each user's needs.
+
+Core principles:
+- Think step by step. Show reasoning naturally when it adds value.
+- Match response length to question complexity. Concise for simple questions, thorough for complex ones.
+- When unsure, acknowledge it honestly. Never fabricate information.
+- If a question is ambiguous, ask clarifying questions.
+
+Language:
+- Always detect and respond in the SAME language the user wrote in.
+- Default to clear, natural language for a global audience.
+
+Output format:
+- Use ONLY plain text. No markdown, no asterisks, no backticks, no special formatting.
+- Organize with clear paragraphs and blank lines. Use indentation for code.
+- Keep lines under 80 characters where possible.
+
+Tone:
+- Be warm, professional, and respectful. Adapt to the user's tone.
+- Be direct but kind. When correcting misconceptions, be gentle.
+- Acknowledge different cultural perspectives where relevant.
+
+Quality:
+- Provide specific, actionable information. Explain the "why" behind recommendations.
+- Present balanced pros and cons when comparing options.
+- Cite knowledge limitations when appropriate.`
+
 type Role string
 
 const (
@@ -15,25 +42,25 @@ const (
 )
 
 type Message struct {
-	Role       Role            `json:"role"`
-	Content    string          `json:"content"`
-	ToolCallID string          `json:"tool_call_id,omitempty"`
-	Name       string          `json:"name,omitempty"`
+	Role       Role   `json:"role"`
+	Content    string `json:"content"`
+	ToolCallID string `json:"tool_call_id,omitempty"`
+	Name       string `json:"name,omitempty"`
 }
 
 type Request struct {
-	Model     string            `json:"model"`
-	Messages  []Message         `json:"messages"`
-	Tools     []ToolDef         `json:"tools,omitempty"`
-	Stream    bool              `json:"stream"`
-	MaxTokens int               `json:"max_tokens,omitempty"`
-	Options   map[string]any    `json:"options,omitempty"`
+	Model     string         `json:"model"`
+	Messages  []Message      `json:"messages"`
+	Tools     []ToolDef      `json:"tools,omitempty"`
+	Stream    bool           `json:"stream"`
+	MaxTokens int            `json:"max_tokens,omitempty"`
+	Options   map[string]any `json:"options,omitempty"`
 }
 
 type Token struct {
-	Content string `json:"content"`
-	Done    bool   `json:"done"`
-	Error   error  `json:"error,omitempty"`
+	Content  string    `json:"content"`
+	Done     bool      `json:"done"`
+	Error    error     `json:"error,omitempty"`
 	ToolCall *ToolCall `json:"tool_call,omitempty"`
 }
 
@@ -55,9 +82,9 @@ type Provider interface {
 }
 
 type ProviderConfig struct {
-	Name    string            `json:"name,omitempty"`
-	APIKey  string            `json:"api_key"`
-	Model   string            `json:"model"`
-	BaseURL string            `json:"base_url"`
-	Options map[string]any    `json:"options"`
+	Name    string         `json:"name,omitempty"`
+	APIKey  string         `json:"api_key"`
+	Model   string         `json:"model"`
+	BaseURL string         `json:"base_url"`
+	Options map[string]any `json:"options"`
 }

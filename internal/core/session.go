@@ -12,6 +12,7 @@ type Session interface {
 	ID() string
 	Messages() []Message
 	Append(msg Message)
+	Replace(msgs []Message)
 	Clear()
 	SetMetadata(key, value string)
 	GetMetadata(key string) (string, bool)
