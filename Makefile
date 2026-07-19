@@ -6,7 +6,7 @@ APP_NAME = agent
 VERSION = $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 BUILD_FLAGS = -ldflags="-s -w -X main.version=$(VERSION)"
 
-.PHONY: all build clean test lint run install setup help
+.PHONY: all build clean test lint run install reinstall setup help
 
 all: clean test build
 
@@ -42,6 +42,14 @@ run-dev:
 # Install the AI agent as the system `go` command
 install:
 	@sudo ./scripts/install.sh
+
+# Rebuild and refresh the installed launcher binary in one step. Prevents the
+# build and the /usr/local/bin/ai-agent launcher from drifting apart.
+LAUNCHER ?= /usr/local/bin/ai-agent
+reinstall: build
+	@echo "==> Installing $(APP_NAME) to $(LAUNCHER)"
+	@sudo install -m 755 $(APP_NAME) "$(LAUNCHER)"
+	@echo "==> Done. 'go \"prompt\"' now uses the fresh build."
 
 # Quick setup without sudo (installs to ~/.local/bin)
 setup:

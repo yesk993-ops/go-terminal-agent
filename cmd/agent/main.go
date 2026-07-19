@@ -62,7 +62,11 @@ func main() {
 	args := flag.Args()
 	if len(args) > 0 {
 		prompt := strings.Join(args, " ")
-		ag := agent.New(p, nil)
+		var opts []agent.Option
+		if cfg.Cache.Enabled {
+			opts = append(opts, agent.WithCache(cache.New(cfg.Cache.MaxSize, cfg.Cache.DefaultTTL)))
+		}
+		ag := agent.New(p, nil, opts...)
 		if err := runOnce(ag, prompt, os.Stdout); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
@@ -174,33 +178,31 @@ func setupProvider(providerName string, cfg *core.Config, modelFlag string) core
 }
 
 func getTerminalWidth() int {
-	if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil {
+	if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && w > 0 {
 		return w
 	}
 	return 80
 }
 
-func renderAnswer(s string) string {
-	s = strings.TrimSpace(s)
-	width := getTerminalWidth() - 4
-	if width < 40 {
-		width = 40
+// contentWidth is the number of columns available for answer text: the
+// terminal width minus a small side margin so wrapped lines never touch the
+// edge. It always fits the current terminal.
+func contentWidth() int {
+	w := getTerminalWidth() - 2
+	if w < 20 {
+		w = 20
 	}
-	var b strings.Builder
-	for _, line := range strings.Split(s, "\n") {
-		for len(line) > width {
-			idx := strings.LastIndex(line[:width], " ")
-			if idx < 1 {
-				idx = width
-			}
-			b.WriteString(line[:idx])
-			b.WriteByte('\n')
-			line = strings.TrimSpace(line[idx:])
-		}
-		b.WriteString(line)
-		b.WriteByte('\n')
+	return w
+}
+
+// systemPromptFor returns the system prompt to send. Short, simple queries get
+// a trimmed prompt to save tokens; anything longer keeps the full prompt so
+// answer quality is unaffected.
+func systemPromptFor(prompt string) string {
+	if len(prompt) <= 120 && !strings.ContainsAny(prompt, "\n") {
+		return core.SystemPromptShort
 	}
-	return b.String()
+	return core.SystemPrompt
 }
 
 func runOnce(ag core.Agent, prompt string, w io.Writer) error {
@@ -211,7 +213,7 @@ func runOnce(ag core.Agent, prompt string, w io.Writer) error {
 		Messages: []core.Message{
 			{
 				Role:    core.RoleSystem,
-				Content: core.SystemPrompt,
+				Content: systemPromptFor(prompt),
 			},
 			{
 				Role:    core.RoleUser,
@@ -227,7 +229,11 @@ func runOnce(ag core.Agent, prompt string, w io.Writer) error {
 		return fmt.Errorf("agent run: %w", err)
 	}
 
-	var buf strings.Builder
+	// Stream the answer live between a top and bottom rule with open sides.
+	width := contentWidth()
+	fw := tui.NewFrameWriter(w, width, getTerminalWidth())
+	defer fw.Close()
+
 	for tok := range ch {
 		if tok.Error != nil {
 			if errors.Is(tok.Error, context.Canceled) {
@@ -239,12 +245,8 @@ func runOnce(ag core.Agent, prompt string, w io.Writer) error {
 			break
 		}
 		if tok.Content != "" {
-			buf.WriteString(tok.Content)
+			fw.Write(tok.Content)
 		}
 	}
-
-	rendered := renderAnswer(buf.String())
-	rendered = tui.AppStyle.Width(getTerminalWidth() - 4).Render(rendered)
-	fmt.Fprintln(w, rendered)
 	return nil
 }

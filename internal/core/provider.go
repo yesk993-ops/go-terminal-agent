@@ -32,6 +32,14 @@ Quality:
 - Present balanced pros and cons when comparing options.
 - Cite knowledge limitations when appropriate.`
 
+// SystemPromptShort is a trimmed prompt used for short, simple one-shot
+// queries to save input tokens while preserving core behavior (plain text,
+// same-language replies, honesty).
+const SystemPromptShort = `You are a helpful, accurate AI assistant.
+- Reply in the same language the user used.
+- Use plain text only: no markdown, asterisks, or backticks.
+- Match length to the question. Be honest about uncertainty; never fabricate.`
+
 type Role string
 
 const (
