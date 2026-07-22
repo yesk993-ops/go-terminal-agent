@@ -44,17 +44,22 @@ func (t *writeTool) Execute(ctx context.Context, args json.RawMessage) *core.Too
 		return &core.ToolResult{Status: core.StatusError, Error: "invalid arguments: " + err.Error()}
 	}
 
-	dir := filepath.Dir(params.FilePath)
+	safePath, err := resolveSafePath(params.FilePath)
+	if err != nil {
+		return &core.ToolResult{Status: core.StatusError, Error: err.Error()}
+	}
+
+	dir := filepath.Dir(safePath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return &core.ToolResult{Status: core.StatusError, Error: fmt.Sprintf("create directory: %v", err)}
 	}
 
-	if err := os.WriteFile(params.FilePath, []byte(params.Content), 0644); err != nil {
+	if err := os.WriteFile(safePath, []byte(params.Content), 0644); err != nil {
 		return &core.ToolResult{Status: core.StatusError, Error: fmt.Sprintf("write file: %v", err)}
 	}
 
 	return &core.ToolResult{
 		Status: core.StatusSuccess,
-		Output: fmt.Sprintf("Written %d bytes to %s", len(params.Content), params.FilePath),
+		Output: fmt.Sprintf("Written %d bytes to %s", len(params.Content), safePath),
 	}
 }

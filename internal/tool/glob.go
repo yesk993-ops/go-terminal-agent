@@ -49,6 +49,7 @@ func (t *globTool) Execute(ctx context.Context, args json.RawMessage) *core.Tool
 		params.Path = "."
 	}
 
+	const maxResults = 10000
 	var results []string
 	err := filepath.Walk(params.Path, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -59,6 +60,9 @@ func (t *globTool) Execute(ctx context.Context, args json.RawMessage) *core.Tool
 				return filepath.SkipDir
 			}
 			return nil
+		}
+		if len(results) >= maxResults {
+			return filepath.SkipAll
 		}
 		match, err := filepath.Match(params.Pattern, filepath.Base(path))
 		if err != nil {

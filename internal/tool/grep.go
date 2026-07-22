@@ -79,6 +79,11 @@ func (t *grepTool) Execute(ctx context.Context, args json.RawMessage) *core.Tool
 			}
 		}
 
+		// Skip files larger than 4MB to prevent memory exhaustion
+		if info.Size() > 4<<20 {
+			return nil
+		}
+
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return nil

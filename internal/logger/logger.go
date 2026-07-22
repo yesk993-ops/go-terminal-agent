@@ -14,51 +14,57 @@ var (
 )
 
 func Init(level, format, output string) {
-	var w io.Writer = os.Stderr
-	switch output {
-	case "stdout":
-		w = os.Stdout
-	case "stderr", "":
-		w = os.Stderr
-	default:
-		f, err := os.OpenFile(output, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-		if err == nil {
-			w = f
+	initOnce.Do(func() {
+		var w io.Writer = os.Stderr
+		switch output {
+		case "stdout":
+			w = os.Stdout
+		case "stderr", "":
+			w = os.Stderr
+		default:
+			f, err := os.OpenFile(output, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+			if err == nil {
+				w = f
+			}
 		}
-	}
 
-	var lvl slog.Level
-	switch strings.ToLower(level) {
-	case "debug":
-		lvl = slog.LevelDebug
-	case "info":
-		lvl = slog.LevelInfo
-	case "warn":
-		lvl = slog.LevelWarn
-	case "error":
-		lvl = slog.LevelError
-	default:
-		lvl = slog.LevelInfo
-	}
+		var lvl slog.Level
+		switch strings.ToLower(level) {
+		case "debug":
+			lvl = slog.LevelDebug
+		case "info":
+			lvl = slog.LevelInfo
+		case "warn":
+			lvl = slog.LevelWarn
+		case "error":
+			lvl = slog.LevelError
+		default:
+			lvl = slog.LevelInfo
+		}
 
-	opts := &slog.HandlerOptions{Level: lvl}
+		opts := &slog.HandlerOptions{Level: lvl}
 
-	var h slog.Handler
-	switch strings.ToLower(format) {
-	case "json":
-		h = slog.NewJSONHandler(w, opts)
-	default:
-		h = slog.NewTextHandler(w, opts)
-	}
+		var h slog.Handler
+		switch strings.ToLower(format) {
+		case "json":
+			h = slog.NewJSONHandler(w, opts)
+		default:
+			h = slog.NewTextHandler(w, opts)
+		}
 
-	defaultLogger = slog.New(h)
-	slog.SetDefault(defaultLogger)
+		defaultLogger = slog.New(h)
+		slog.SetDefault(defaultLogger)
+	})
 }
 
 func L() *slog.Logger {
 	initOnce.Do(func() {
 		if defaultLogger == nil {
-			Init("info", "text", "stderr")
+			var w io.Writer = os.Stderr
+			opts := &slog.HandlerOptions{Level: slog.LevelInfo}
+			h := slog.NewTextHandler(w, opts)
+			defaultLogger = slog.New(h)
+			slog.SetDefault(defaultLogger)
 		}
 	})
 	return defaultLogger

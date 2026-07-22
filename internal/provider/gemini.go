@@ -9,12 +9,16 @@ import (
 
 type geminiProvider struct {
 	baseProvider
+	apiKey string
 }
 
 func init() {
 	Register("gemini", func(cfg core.ProviderConfig) core.Provider {
+		// Gemini uses X-Goog-Api-Key header, not Bearer auth.
+		// Pass the API key through extra headers to avoid double-auth.
 		return &geminiProvider{
-			baseProvider: newBaseProvider("gemini", cfg.APIKey, cfg.Model, cfg.BaseURL),
+			baseProvider: newBaseProvider("gemini", "", cfg.Model, cfg.BaseURL),
+			apiKey:       cfg.APIKey,
 		}
 	})
 }
@@ -65,9 +69,11 @@ func (p *geminiProvider) Stream(ctx context.Context, req *core.Request) (<-chan 
 	url := fmt.Sprintf("%s/models/%s:streamGenerateContent?alt=sse",
 		p.baseURL, p.model)
 
-	resp, err := p.doPost(ctx, url, chatReq, map[string]string{
+	headers := map[string]string{
 		"X-Goog-Api-Key": p.apiKey,
-	})
+	}
+
+	resp, err := p.doPost(ctx, url, chatReq, headers)
 	if err != nil {
 		return nil, err
 	}

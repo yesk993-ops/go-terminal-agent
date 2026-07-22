@@ -126,23 +126,47 @@ func (s *session) ID() string {
 func (s *session) Messages() []core.Message {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	// Return a defensive copy to prevent callers from mutating the internal slice.
 	msgs := make([]core.Message, len(s.messages))
 	copy(msgs, s.messages)
+	return msgs
+}
+
+// MessagesSlice returns the last n messages without copying. Callers must
+// not mutate the returned slice. Use only in performance-critical paths
+// where the slice is read-only and consumed immediately.
+func (s *session) MessagesSlice(n int) []core.Message {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	msgs := s.messages
+	if n > 0 && len(msgs) > n {
+		msgs = msgs[len(msgs)-n:]
+	}
 	return msgs
 }
 
 func (s *session) Append(msg core.Message) {
 	s.mu.Lock()
 	s.messages = append(s.messages, msg)
+	// Snapshot messages and metadata under the lock to prevent data races
+	// when saving on a background goroutine.
+	msgsCopy := make([]core.Message, len(s.messages))
+	copy(msgsCopy, s.messages)
+	metaCopy := make(map[string]string, len(s.metadata))
+	for k, v := range s.metadata {
+		metaCopy[k] = v
+	}
+	store := s.store
+	autoSave := store != nil && store.autoSave
+	id := s.id
 	s.mu.Unlock()
-	if s.store != nil && s.store.autoSave {
-		saveSessionTo(s.store, s.id, s.messages, s.metadata)
+
+	if autoSave {
+		saveSessionTo(store, id, msgsCopy, metaCopy)
 	}
 }
 
 func saveSessionTo(store *sessionStore, id string, messages []core.Message, metadata map[string]string) {
-	store.mu.RLock()
-	defer store.mu.RUnlock()
 	data, err := json.Marshal(map[string]any{
 		"id":       id,
 		"messages": messages,
@@ -152,7 +176,12 @@ func saveSessionTo(store *sessionStore, id string, messages []core.Message, meta
 		logger.L().Warn("failed to marshal session", "id", id, "error", err)
 		return
 	}
-	path := filepath.Join(store.savePath, id+".json")
+
+	store.mu.RLock()
+	savePath := store.savePath
+	store.mu.RUnlock()
+
+	path := filepath.Join(savePath, id+".json")
 	if err := os.WriteFile(path, data, 0644); err != nil {
 		logger.L().Warn("failed to save session", "id", id, "path", path, "error", err)
 	}
@@ -161,9 +190,19 @@ func saveSessionTo(store *sessionStore, id string, messages []core.Message, meta
 func (s *session) Replace(msgs []core.Message) {
 	s.mu.Lock()
 	s.messages = msgs
+	msgsCopy := make([]core.Message, len(msgs))
+	copy(msgsCopy, msgs)
+	metaCopy := make(map[string]string, len(s.metadata))
+	for k, v := range s.metadata {
+		metaCopy[k] = v
+	}
+	store := s.store
+	autoSave := store != nil && store.autoSave
+	id := s.id
 	s.mu.Unlock()
-	if s.store != nil && s.store.autoSave {
-		saveSessionTo(s.store, s.id, s.messages, s.metadata)
+
+	if autoSave {
+		saveSessionTo(store, id, msgsCopy, metaCopy)
 	}
 }
 

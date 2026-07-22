@@ -48,7 +48,12 @@ func (t *readTool) Execute(ctx context.Context, args json.RawMessage) *core.Tool
 		return &core.ToolResult{Status: core.StatusError, Error: "invalid arguments: " + err.Error()}
 	}
 
-	data, err := os.ReadFile(params.FilePath)
+	safePath, err := resolveSafePath(params.FilePath)
+	if err != nil {
+		return &core.ToolResult{Status: core.StatusError, Error: err.Error()}
+	}
+
+	data, err := os.ReadFile(safePath)
 	if err != nil {
 		return &core.ToolResult{Status: core.StatusError, Error: fmt.Sprintf("read file: %v", err)}
 	}

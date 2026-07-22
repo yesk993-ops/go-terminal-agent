@@ -205,7 +205,7 @@ func systemPromptFor(prompt string) string {
 	return core.SystemPrompt
 }
 
-func runOnce(ag core.Agent, prompt string, w io.Writer) error {
+func runOnce(ag core.Agent, prompt string, w io.Writer) (retErr error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -232,7 +232,11 @@ func runOnce(ag core.Agent, prompt string, w io.Writer) error {
 	// Stream the answer live between a top and bottom rule with open sides.
 	width := contentWidth()
 	fw := tui.NewFrameWriter(w, width, getTerminalWidth())
-	defer fw.Close()
+	defer func() {
+		if cerr := fw.Close(); cerr != nil && retErr == nil {
+			retErr = cerr
+		}
+	}()
 
 	for tok := range ch {
 		if tok.Error != nil {
