@@ -14,9 +14,13 @@ var (
 
 	TitleStyle = lipgloss.NewStyle().Bold(true)
 
-	// Message labels in the chat transcript.
-	UserLabelStyle      = lipgloss.NewStyle().Bold(true)
-	AssistantLabelStyle = lipgloss.NewStyle().Bold(true)
+	// Message labels in the chat transcript. Distinct accent colors give each
+	// speaker a clear identity; AdaptiveColor keeps them legible on both light
+	// and dark terminals.
+	UserLabelStyle = lipgloss.NewStyle().Bold(true).
+			Foreground(lipgloss.AdaptiveColor{Light: "#0F766E", Dark: "#2DD4BF"}) // teal
+	AssistantLabelStyle = lipgloss.NewStyle().Bold(true).
+				Foreground(lipgloss.AdaptiveColor{Light: "#B45309", Dark: "#FBBF24"}) // amber
 
 	SpinnerStyle = lipgloss.NewStyle()
 

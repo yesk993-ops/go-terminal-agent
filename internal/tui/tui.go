@@ -385,7 +385,9 @@ func (m *model) completedTranscript() string {
 
 	for i, msg := range visible {
 		if i > 0 {
-			b.WriteByte('\n')
+			// Blank line between turns so "You"/"Assistant" blocks are visually
+			// separated rather than stacked flush against each other.
+			b.WriteString("\n\n")
 		}
 		switch msg.role {
 		case core.RoleUser:
@@ -410,7 +412,7 @@ func (m *model) transcript() string {
 
 	if m.streamContent.Len() > 0 {
 		if completed != "" {
-			b.WriteByte('\n')
+			b.WriteString("\n\n")
 		}
 		w := m.width - 2
 		if w < 20 {
@@ -421,7 +423,7 @@ func (m *model) transcript() string {
 
 	if m.loading {
 		if completed != "" || m.streamContent.Len() > 0 {
-			b.WriteByte('\n')
+			b.WriteString("\n\n")
 		}
 		b.WriteString(m.spinner.View() + " Thinking...")
 	}
