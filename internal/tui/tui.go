@@ -338,11 +338,8 @@ func (m *model) View() string {
 	}
 
 	var b strings.Builder
-	b.WriteString(TitleStyle.Render(fmt.Sprintf(" %s — %s ", m.provider, m.modelName)))
-	b.WriteByte('\n')
+	b.WriteString(fmt.Sprintf("%s — %s\n", m.provider, m.modelName))
 	b.WriteString(m.viewport.View())
-	b.WriteByte('\n')
-	b.WriteString(m.divider())
 	b.WriteByte('\n')
 	b.WriteString(m.input.View())
 	return b.String()
@@ -357,11 +354,7 @@ func (m *model) viewportHeight() int {
 }
 
 func (m *model) divider() string {
-	w := m.width
-	if w < 1 {
-		w = 1
-	}
-	return DividerStyle.Render(strings.Repeat("─", w))
+	return ""
 }
 
 // refreshChat rebuilds only the dynamic part of the transcript. Completed
@@ -400,7 +393,6 @@ func (m *model) completedTranscript() string {
 		case core.RoleAssistant:
 			b.WriteString(RenderAssistantMessage(msg.content, w))
 		}
-		b.WriteByte('\n')
 	}
 
 	m.historyRendered = b.String()
@@ -425,13 +417,13 @@ func (m *model) transcript() string {
 			w = 20
 		}
 		b.WriteString(RenderAssistantMessage(m.streamContent.String(), w))
-		b.WriteByte('\n')
 	}
 
 	if m.loading {
-		b.WriteByte('\n')
+		if completed != "" || m.streamContent.Len() > 0 {
+			b.WriteByte('\n')
+		}
 		b.WriteString(m.spinner.View() + " Thinking...")
-		b.WriteByte('\n')
 	}
 
 	return b.String()
