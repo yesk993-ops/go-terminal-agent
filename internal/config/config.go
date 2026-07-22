@@ -99,7 +99,7 @@ func Load(path string) (*core.Config, error) {
 			MaxMessages: v.GetInt("session.max_messages"),
 			MaxAge:      v.GetDuration("session.max_age"),
 			AutoSave:    v.GetBool("session.auto_save"),
-			SavePath:    v.GetString("session.save_path"),
+			SavePath:    expandHomePath(v.GetString("session.save_path")),
 		},
 		Cache: core.CacheSettings{
 			Enabled:    v.GetBool("cache.enabled"),
@@ -156,6 +156,18 @@ func defaultSessionPath() string {
 		return filepath.Join(os.TempDir(), appName, "sessions")
 	}
 	return filepath.Join(home, ".local", "share", appName)
+}
+
+func expandHomePath(path string) string {
+	if path == "~" || len(path) > 2 && path[:2] == "~/" {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			if path == "~" {
+				return home
+			}
+			return filepath.Join(home, path[2:])
+		}
+	}
+	return path
 }
 
 func Save(path string, cfg *core.Config) error {

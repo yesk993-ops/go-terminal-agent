@@ -4,10 +4,15 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -31,14 +36,21 @@ func Register(name string, factory Factory) {
 }
 
 func Get(name string, cfg core.ProviderConfig) core.Provider {
-	cacheKey := name
-	if cfg.Model != "" {
-		cacheKey = name + ":" + cfg.Model
+	// The client holds credentials and a base URL, so model alone is not a
+	// sufficient identity. Hashing the key avoids retaining it verbatim in a
+	// global map key while preventing accidental client reuse across accounts.
+	keyHash := sha256.Sum256([]byte(cfg.APIKey))
+	cacheKey := name + ":" + cfg.Model + ":" + cfg.BaseURL + ":" + hex.EncodeToString(keyHash[:])
+
+	mu.RLock()
+	if p, ok := providers[cacheKey]; ok {
+		mu.RUnlock()
+		return p
 	}
+	mu.RUnlock()
 
 	mu.Lock()
 	defer mu.Unlock()
-
 	if p, ok := providers[cacheKey]; ok {
 		return p
 	}
@@ -60,6 +72,7 @@ func ListAvailable() []string {
 	for n := range registry {
 		names = append(names, n)
 	}
+	sort.Strings(names)
 	return names
 }
 
@@ -69,6 +82,42 @@ type baseProvider struct {
 	model   string
 	baseURL string
 	client  *http.Client
+}
+
+// httpError preserves status and Retry-After information so fallback policy
+// can react immediately to a known rate limit instead of parsing strings and
+// repeatedly sleeping on a provider that cannot serve the request.
+type httpError struct {
+	StatusCode int
+	Body       string
+	RetryAfter time.Duration
+}
+
+func (e *httpError) Error() string {
+	if e.Body == "" {
+		return fmt.Sprintf("API error (status %d)", e.StatusCode)
+	}
+	return fmt.Sprintf("API error (status %d): %s", e.StatusCode, e.Body)
+}
+
+func retryAfterFromHeader(value string) time.Duration {
+	if seconds, err := strconv.Atoi(strings.TrimSpace(value)); err == nil && seconds >= 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	if when, err := http.ParseTime(value); err == nil {
+		if delay := time.Until(when); delay > 0 {
+			return delay
+		}
+	}
+	return 0
+}
+
+func asHTTPError(err error) (*httpError, bool) {
+	var httpErr *httpError
+	if errors.As(err, &httpErr) {
+		return httpErr, true
+	}
+	return nil, false
 }
 
 func newBaseProvider(name, apiKey, model, baseURL string) baseProvider {
@@ -86,9 +135,11 @@ func newBaseProvider(name, apiKey, model, baseURL string) baseProvider {
 		client: &http.Client{
 			Timeout: 120 * time.Second,
 			Transport: &http.Transport{
-				MaxIdleConns:       10,
-				IdleConnTimeout:    30 * time.Second,
-				DisableCompression: false,
+				MaxIdleConns:        20,
+				MaxIdleConnsPerHost: 10,
+				IdleConnTimeout:     90 * time.Second,
+				DisableCompression:  false,
+				ForceAttemptHTTP2:   true,
 			},
 		},
 	}
@@ -163,18 +214,35 @@ type accumulatedToolCall struct {
 	argsBuf strings.Builder
 }
 
+func watchStreamCancellation(ctx context.Context, body io.Closer) func() {
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = body.Close()
+		case <-done:
+		}
+	}()
+	return func() { close(done) }
+}
+
+func sendStreamToken(ctx context.Context, tokenCh chan<- core.Token, token core.Token) bool {
+	select {
+	case tokenCh <- token:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 func streamOpenAICompatibleSSE(ctx context.Context, resp *http.Response) (<-chan core.Token, error) {
 	tokenCh := make(chan core.Token, 64)
 
 	go func() {
 		defer close(tokenCh)
 		defer resp.Body.Close()
-
-		// Ensure body is closed on context cancellation even if blocked on read.
-		go func() {
-			<-ctx.Done()
-			resp.Body.Close()
-		}()
+		stopWatching := watchStreamCancellation(ctx, resp.Body)
+		defer stopWatching()
 
 		scanner := bufio.NewScanner(resp.Body)
 		scanner.Buffer(make([]byte, 0, 64*1024), 256*1024)
@@ -185,7 +253,7 @@ func streamOpenAICompatibleSSE(ctx context.Context, resp *http.Response) (<-chan
 			line := scanner.Text()
 
 			if err := ctx.Err(); err != nil {
-				tokenCh <- core.Token{Error: core.ErrContextCancelled, Done: true}
+				sendStreamToken(ctx, tokenCh, core.Token{Error: core.ErrContextCancelled, Done: true})
 				return
 			}
 
@@ -195,8 +263,10 @@ func streamOpenAICompatibleSSE(ctx context.Context, resp *http.Response) (<-chan
 
 			data := strings.TrimPrefix(line, "data: ")
 			if data == "[DONE]" {
-				flushPendingToolCalls(&pending, tokenCh)
-				tokenCh <- core.Token{Done: true}
+				if !flushPendingToolCalls(ctx, &pending, tokenCh) {
+					return
+				}
+				sendStreamToken(ctx, tokenCh, core.Token{Done: true})
 				return
 			}
 
@@ -217,26 +287,29 @@ func streamOpenAICompatibleSSE(ctx context.Context, resp *http.Response) (<-chan
 			}
 
 			if choice.FinishReason != nil && *choice.FinishReason != "" {
-				if *choice.FinishReason == "tool_calls" {
-					flushPendingToolCalls(&pending, tokenCh)
+				if *choice.FinishReason == "tool_calls" && !flushPendingToolCalls(ctx, &pending, tokenCh) {
+					return
 				}
-				tokenCh <- core.Token{Done: true}
+				sendStreamToken(ctx, tokenCh, core.Token{Done: true})
 				return
 			}
 
 			if choice.Delta.Content != "" {
-				if len(pending) > 0 {
-					flushPendingToolCalls(&pending, tokenCh)
+				if len(pending) > 0 && !flushPendingToolCalls(ctx, &pending, tokenCh) {
+					return
 				}
-				tokenCh <- core.Token{Content: choice.Delta.Content}
+				if !sendStreamToken(ctx, tokenCh, core.Token{Content: choice.Delta.Content}) {
+					return
+				}
 			}
 		}
 
-		flushPendingToolCalls(&pending, tokenCh)
-
-		if err := scanner.Err(); err != nil {
+		if !flushPendingToolCalls(ctx, &pending, tokenCh) {
+			return
+		}
+		if err := scanner.Err(); err != nil && ctx.Err() == nil {
 			logger.L().Debug("SSE scan error", "error", err)
-			tokenCh <- core.Token{Error: err, Done: true}
+			sendStreamToken(ctx, tokenCh, core.Token{Error: err, Done: true})
 		}
 	}()
 
@@ -263,20 +336,23 @@ func accumulateToolCall(pending *[]*accumulatedToolCall, tc openAIToolCallDelta)
 	}
 }
 
-func flushPendingToolCalls(pending *[]*accumulatedToolCall, tokenCh chan core.Token) {
+func flushPendingToolCalls(ctx context.Context, pending *[]*accumulatedToolCall, tokenCh chan<- core.Token) bool {
 	for _, atc := range *pending {
 		if atc.id == "" || atc.name == "" {
 			continue
 		}
-		tokenCh <- core.Token{
+		if !sendStreamToken(ctx, tokenCh, core.Token{
 			ToolCall: &core.ToolCall{
 				ID:   atc.id,
 				Name: atc.name,
 				Args: []byte(atc.argsBuf.String()),
 			},
+		}) {
+			return false
 		}
 	}
 	*pending = nil
+	return true
 }
 
 func streamGeminiSSE(ctx context.Context, resp *http.Response) (<-chan core.Token, error) {
@@ -285,12 +361,8 @@ func streamGeminiSSE(ctx context.Context, resp *http.Response) (<-chan core.Toke
 	go func() {
 		defer close(tokenCh)
 		defer resp.Body.Close()
-
-		// Ensure body is closed on context cancellation even if blocked on read.
-		go func() {
-			<-ctx.Done()
-			resp.Body.Close()
-		}()
+		stopWatching := watchStreamCancellation(ctx, resp.Body)
+		defer stopWatching()
 
 		scanner := bufio.NewScanner(resp.Body)
 		scanner.Buffer(make([]byte, 0, 64*1024), 256*1024)
@@ -299,7 +371,7 @@ func streamGeminiSSE(ctx context.Context, resp *http.Response) (<-chan core.Toke
 			line := scanner.Text()
 
 			if err := ctx.Err(); err != nil {
-				tokenCh <- core.Token{Error: core.ErrContextCancelled, Done: true}
+				sendStreamToken(ctx, tokenCh, core.Token{Error: core.ErrContextCancelled, Done: true})
 				return
 			}
 
@@ -309,7 +381,7 @@ func streamGeminiSSE(ctx context.Context, resp *http.Response) (<-chan core.Toke
 
 			data := strings.TrimPrefix(line, "data: ")
 			if data == "[DONE]" {
-				tokenCh <- core.Token{Done: true}
+				sendStreamToken(ctx, tokenCh, core.Token{Done: true})
 				return
 			}
 
@@ -333,22 +405,21 @@ func streamGeminiSSE(ctx context.Context, resp *http.Response) (<-chan core.Toke
 			}
 
 			candidate := chunk.Candidates[0]
-
 			if candidate.FinishReason != "" {
-				tokenCh <- core.Token{Done: true}
+				sendStreamToken(ctx, tokenCh, core.Token{Done: true})
 				return
 			}
 
 			for _, part := range candidate.Content.Parts {
-				if part.Text != "" {
-					tokenCh <- core.Token{Content: part.Text}
+				if part.Text != "" && !sendStreamToken(ctx, tokenCh, core.Token{Content: part.Text}) {
+					return
 				}
 			}
 		}
 
-		if err := scanner.Err(); err != nil {
+		if err := scanner.Err(); err != nil && ctx.Err() == nil {
 			logger.L().Debug("Gemini SSE scan error", "error", err)
-			tokenCh <- core.Token{Error: err, Done: true}
+			sendStreamToken(ctx, tokenCh, core.Token{Error: err, Done: true})
 		}
 	}()
 
@@ -361,12 +432,8 @@ func streamAnthropicSSE(ctx context.Context, resp *http.Response) (<-chan core.T
 	go func() {
 		defer close(tokenCh)
 		defer resp.Body.Close()
-
-		// Ensure body is closed on context cancellation even if blocked on read.
-		go func() {
-			<-ctx.Done()
-			resp.Body.Close()
-		}()
+		stopWatching := watchStreamCancellation(ctx, resp.Body)
+		defer stopWatching()
 
 		scanner := bufio.NewScanner(resp.Body)
 		scanner.Buffer(make([]byte, 0, 64*1024), 256*1024)
@@ -375,54 +442,52 @@ func streamAnthropicSSE(ctx context.Context, resp *http.Response) (<-chan core.T
 			line := scanner.Text()
 
 			if err := ctx.Err(); err != nil {
-				tokenCh <- core.Token{Error: core.ErrContextCancelled, Done: true}
+				sendStreamToken(ctx, tokenCh, core.Token{Error: core.ErrContextCancelled, Done: true})
 				return
 			}
 
-			if strings.HasPrefix(line, "event: ") {
+			if !strings.HasPrefix(line, "data: ") {
 				continue
 			}
 
-			if strings.HasPrefix(line, "data: ") {
-				data := strings.TrimPrefix(line, "data: ")
+			data := strings.TrimPrefix(line, "data: ")
+			var event struct {
+				Type  string `json:"type"`
+				Delta struct {
+					Text string `json:"text"`
+				} `json:"delta"`
+				ContentBlock struct {
+					Text string `json:"text"`
+				} `json:"content_block"`
+			}
 
-				var event struct {
-					Type  string `json:"type"`
-					Delta struct {
-						Text string `json:"text"`
-					} `json:"delta"`
-					ContentBlock struct {
-						Text string `json:"text"`
-					} `json:"content_block"`
-				}
+			if err := json.Unmarshal([]byte(data), &event); err != nil {
+				continue
+			}
 
-				if err := json.Unmarshal([]byte(data), &event); err != nil {
-					continue
-				}
-
-				switch event.Type {
-				case "content_block_delta":
-					if event.Delta.Text != "" {
-						tokenCh <- core.Token{Content: event.Delta.Text}
-					}
-				case "content_block_start":
-					if event.ContentBlock.Text != "" {
-						tokenCh <- core.Token{Content: event.ContentBlock.Text}
-					}
-				case "message_stop":
-					tokenCh <- core.Token{Done: true}
+			switch event.Type {
+			case "content_block_delta":
+				if event.Delta.Text != "" && !sendStreamToken(ctx, tokenCh, core.Token{Content: event.Delta.Text}) {
 					return
 				}
+			case "content_block_start":
+				if event.ContentBlock.Text != "" && !sendStreamToken(ctx, tokenCh, core.Token{Content: event.ContentBlock.Text}) {
+					return
+				}
+			case "message_stop":
+				sendStreamToken(ctx, tokenCh, core.Token{Done: true})
+				return
 			}
 		}
 
-		if err := scanner.Err(); err != nil {
-			tokenCh <- core.Token{Error: err, Done: true}
+		if err := scanner.Err(); err != nil && ctx.Err() == nil {
 			logger.L().Debug("Anthropic SSE error", "error", err)
+			sendStreamToken(ctx, tokenCh, core.Token{Error: err, Done: true})
 			return
 		}
-
-		tokenCh <- core.Token{Done: true}
+		if ctx.Err() == nil {
+			sendStreamToken(ctx, tokenCh, core.Token{Done: true})
+		}
 	}()
 
 	return tokenCh, nil
@@ -524,10 +589,15 @@ func doPostClient(ctx context.Context, url, apiKey string, body any, extraHeader
 		return nil, fmt.Errorf("http request: %w", err)
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		retryAfter := retryAfterFromHeader(resp.Header.Get("Retry-After"))
 		resp.Body.Close()
-		return nil, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
+		return nil, &httpError{
+			StatusCode: resp.StatusCode,
+			Body:       string(respBody),
+			RetryAfter: retryAfter,
+		}
 	}
 
 	return resp, nil

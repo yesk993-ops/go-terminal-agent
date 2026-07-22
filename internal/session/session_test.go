@@ -1,13 +1,15 @@
 package session
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/agent/ai-terminal/internal/core"
 )
 
 func TestSessionCreateAndGet(t *testing.T) {
-	store := NewStore(100, "/tmp/agent-test-sessions", false)
+	store := NewStore(100, t.TempDir(), false)
 	sess := store.Create()
 
 	if sess.ID() == "" {
@@ -24,7 +26,7 @@ func TestSessionCreateAndGet(t *testing.T) {
 }
 
 func TestSessionAppendMessages(t *testing.T) {
-	store := NewStore(100, "/tmp/agent-test-sessions", false)
+	store := NewStore(100, t.TempDir(), false)
 	sess := store.Create()
 
 	sess.Append(core.Message{Role: core.RoleUser, Content: "hello"})
@@ -43,7 +45,7 @@ func TestSessionAppendMessages(t *testing.T) {
 }
 
 func TestSessionClear(t *testing.T) {
-	store := NewStore(100, "/tmp/agent-test-sessions", false)
+	store := NewStore(100, t.TempDir(), false)
 	sess := store.Create()
 
 	sess.Append(core.Message{Role: core.RoleUser, Content: "hello"})
@@ -56,7 +58,7 @@ func TestSessionClear(t *testing.T) {
 }
 
 func TestSessionMetadata(t *testing.T) {
-	store := NewStore(100, "/tmp/agent-test-sessions", false)
+	store := NewStore(100, t.TempDir(), false)
 	sess := store.Create()
 
 	sess.SetMetadata("key1", "value1")
@@ -74,7 +76,7 @@ func TestSessionMetadata(t *testing.T) {
 }
 
 func TestSessionDelete(t *testing.T) {
-	store := NewStore(100, "/tmp/agent-test-sessions", false)
+	store := NewStore(100, t.TempDir(), false)
 	sess := store.Create()
 
 	store.Delete(sess.ID())
@@ -86,7 +88,7 @@ func TestSessionDelete(t *testing.T) {
 }
 
 func TestSessionList(t *testing.T) {
-	store := NewStore(100, "/tmp/agent-test-sessions", false)
+	store := NewStore(100, t.TempDir(), false)
 
 	s1 := store.Create()
 	s2 := store.Create()
@@ -99,5 +101,31 @@ func TestSessionList(t *testing.T) {
 	ids := map[string]bool{list[0].ID(): true, list[1].ID(): true}
 	if !ids[s1.ID()] || !ids[s2.ID()] {
 		t.Fatal("expected both sessions in list")
+	}
+}
+
+func TestSessionAutoSaveFlushesBoundedHistory(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(2, dir, true).(*sessionStore)
+	sess := store.CreateWithID("persist")
+
+	sess.Append(core.Message{Role: core.RoleUser, Content: "one"})
+	sess.Append(core.Message{Role: core.RoleAssistant, Content: "two"})
+	sess.Append(core.Message{Role: core.RoleUser, Content: "three"})
+	FlushSession(sess)
+
+	path := filepath.Join(dir, "persist.json")
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected flushed session file: %v", err)
+	}
+
+	reloaded := NewStore(2, dir, false)
+	loaded, ok := reloaded.Get("persist")
+	if !ok {
+		t.Fatal("expected persisted session to load")
+	}
+	messages := loaded.Messages()
+	if len(messages) != 2 || messages[0].Content != "two" || messages[1].Content != "three" {
+		t.Fatalf("unexpected bounded history: %#v", messages)
 	}
 }
