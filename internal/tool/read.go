@@ -1,10 +1,13 @@
 package tool
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"strings"
 
 	"github.com/agent/ai-terminal/internal/core"
 )
@@ -53,36 +56,83 @@ func (t *readTool) Execute(ctx context.Context, args json.RawMessage) *core.Tool
 		return &core.ToolResult{Status: core.StatusError, Error: err.Error()}
 	}
 
-	data, err := os.ReadFile(safePath)
-	if err != nil {
-		return &core.ToolResult{Status: core.StatusError, Error: fmt.Sprintf("read file: %v", err)}
+	if params.Offset <= 0 && params.Limit <= 0 {
+		data, err := os.ReadFile(safePath)
+		if err != nil {
+			return &core.ToolResult{Status: core.StatusError, Error: fmt.Sprintf("read file: %v", err)}
+		}
+		return &core.ToolResult{Status: core.StatusSuccess, Output: string(data)}
 	}
 
-	content := string(data)
+	content, err := readLineRange(ctx, safePath, params.Offset, params.Limit)
+	if err != nil {
+		return &core.ToolResult{Status: core.StatusError, Error: err.Error()}
+	}
+	return &core.ToolResult{Status: core.StatusSuccess, Output: content}
+}
 
-	if params.Offset > 0 || params.Limit > 0 {
-		lines := splitLines(content)
-		start := params.Offset
-		if start < 1 {
-			start = 1
+// readLineRange scans only the requested portion instead of allocating and
+// splitting an entire file when the caller asks for a small window.
+func readLineRange(ctx context.Context, path string, offset, limit int) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("read file: %w", err)
+	}
+	defer f.Close()
+
+	start := offset
+	if start < 1 {
+		start = 1
+	}
+	end := int(^uint(0) >> 1)
+	if limit > 0 {
+		end = start + limit - 1
+	}
+
+	reader := bufio.NewReaderSize(f, 64*1024)
+	var out strings.Builder
+	lineNo := 0
+	selected := 0
+	lastEndedWithNewline := false
+	appendLine := func(line string) {
+		if lineNo < start || lineNo > end {
+			return
 		}
-		end := len(lines)
-		if params.Limit > 0 {
-			end = start + params.Limit - 1
-			if end > len(lines) {
-				end = len(lines)
+		line = strings.TrimSuffix(line, "\n")
+		if selected > 0 {
+			out.WriteByte('\n')
+		}
+		out.WriteString(line)
+		selected++
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return "", fmt.Errorf("read file: %w", err)
+		}
+		line, readErr := reader.ReadString('\n')
+		if len(line) > 0 {
+			lastEndedWithNewline = strings.HasSuffix(line, "\n")
+			lineNo++
+			appendLine(line)
+			if lineNo >= end {
+				break
 			}
 		}
-		if start > len(lines) {
-			return &core.ToolResult{Status: core.StatusSuccess, Output: ""}
+		if readErr != nil {
+			if readErr == io.EOF {
+				// splitLines, the historical implementation, considers a final
+				// newline to create one trailing empty logical line. Preserve that
+				// exact range behavior without reading the whole file.
+				if len(line) == 0 && lastEndedWithNewline {
+					lineNo++
+					appendLine("")
+				}
+				break
+			}
+			return "", fmt.Errorf("read file: %w", readErr)
 		}
-		content = joinLines(lines[start-1 : end])
 	}
-
-	return &core.ToolResult{
-		Status: core.StatusSuccess,
-		Output: content,
-	}
+	return out.String(), nil
 }
 
 func splitLines(s string) []string {
@@ -101,12 +151,5 @@ func splitLines(s string) []string {
 }
 
 func joinLines(lines []string) string {
-	result := ""
-	for i, line := range lines {
-		if i > 0 {
-			result += "\n"
-		}
-		result += line
-	}
-	return result
+	return strings.Join(lines, "\n")
 }

@@ -1,9 +1,12 @@
 package tool
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -11,6 +14,14 @@ import (
 
 	"github.com/agent/ai-terminal/internal/core"
 )
+
+const (
+	maxGrepFileSize = 4 << 20
+	maxGrepMatches  = 5000
+	maxGrepOutput   = 50000
+)
+
+var errGrepLimitReached = errors.New("grep result limit reached")
 
 type grepTool struct{}
 
@@ -59,17 +70,31 @@ func (t *grepTool) Execute(ctx context.Context, args json.RawMessage) *core.Tool
 	if err != nil {
 		return &core.ToolResult{Status: core.StatusError, Error: "invalid regex pattern: " + err.Error()}
 	}
+	if params.Include != "" {
+		if _, err := filepath.Match(params.Include, "example"); err != nil {
+			return &core.ToolResult{Status: core.StatusError, Error: "invalid include pattern: " + err.Error()}
+		}
+	}
 
-	var results []string
-	err = filepath.Walk(params.Path, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
+	var output strings.Builder
+	matches := 0
+	truncated := false
+	err = filepath.WalkDir(params.Path, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
 			return nil
 		}
-		if info.IsDir() {
-			if strings.HasPrefix(info.Name(), ".") && info.Name() != "." {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			if strings.HasPrefix(entry.Name(), ".") && entry.Name() != "." {
 				return filepath.SkipDir
 			}
 			return nil
+		}
+		if matches >= maxGrepMatches || output.Len() >= maxGrepOutput {
+			truncated = true
+			return filepath.SkipAll
 		}
 
 		if params.Include != "" {
@@ -79,41 +104,71 @@ func (t *grepTool) Execute(ctx context.Context, args json.RawMessage) *core.Tool
 			}
 		}
 
-		// Skip files larger than 4MB to prevent memory exhaustion
-		if info.Size() > 4<<20 {
+		info, err := entry.Info()
+		if err != nil || info.Size() > maxGrepFileSize {
 			return nil
 		}
-
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return nil
-		}
-
-		lines := strings.Split(string(data), "\n")
-		for i, line := range lines {
-			if re.MatchString(line) {
-				results = append(results, fmt.Sprintf("%s:%d: %s", path, i+1, strings.TrimSpace(line)))
+		if err := grepFile(ctx, path, re, &output, &matches); err != nil {
+			if errors.Is(err, errGrepLimitReached) {
+				truncated = true
+				return filepath.SkipAll
 			}
+			if err == context.Canceled || err == context.DeadlineExceeded {
+				return err
+			}
+			return nil
+		}
+		if matches >= maxGrepMatches || output.Len() >= maxGrepOutput {
+			truncated = true
+			return filepath.SkipAll
 		}
 		return nil
 	})
 
 	if err != nil {
+		if err == context.Canceled || err == context.DeadlineExceeded {
+			return &core.ToolResult{Status: core.StatusError, Error: fmt.Sprintf("search cancelled: %v", err)}
+		}
 		return &core.ToolResult{Status: core.StatusError, Error: fmt.Sprintf("search error: %v", err)}
 	}
 
-	if len(results) == 0 {
+	if matches == 0 {
 		return &core.ToolResult{Status: core.StatusSuccess, Output: "No matches found"}
 	}
-
-	output := strings.Join(results, "\n")
-	if len(output) > 50000 {
-		runes := []rune(output)
-		output = string(runes[:50000]) + "\n... (truncated)"
+	if truncated {
+		output.WriteString("... (search truncated; narrow the path or pattern for more results)\n")
 	}
-
 	return &core.ToolResult{
 		Status: core.StatusSuccess,
-		Output: fmt.Sprintf("Found %d matches:\n%s", len(results), output),
+		Output: fmt.Sprintf("Found %d matches%s:\n%s", matches, map[bool]string{true: " (partial)", false: ""}[truncated], output.String()),
 	}
+}
+
+func grepFile(ctx context.Context, path string, re *regexp.Regexp, output *strings.Builder, matches *int) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	lineNo := 0
+	for scanner.Scan() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		lineNo++
+		line := scanner.Text()
+		if !re.MatchString(line) {
+			continue
+		}
+		formatted := fmt.Sprintf("%s:%d: %s\n", path, lineNo, strings.TrimSpace(line))
+		if *matches >= maxGrepMatches || output.Len()+len(formatted) > maxGrepOutput {
+			return errGrepLimitReached
+		}
+		output.WriteString(formatted)
+		(*matches)++
+	}
+	return scanner.Err()
 }

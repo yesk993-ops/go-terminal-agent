@@ -2,6 +2,9 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -66,13 +69,15 @@ func (a *DefaultAgent) Run(ctx context.Context, req *core.Request) (<-chan core.
 	if provider == nil {
 		return nil, fmt.Errorf("no provider configured")
 	}
-
-	if a.session != nil {
-		for _, m := range req.Messages {
-			a.session.Append(m)
-		}
+	if req == nil {
+		return nil, fmt.Errorf("request is required")
 	}
 
+	// The caller owns request history. In particular, interactive callers send
+	// prior session messages with each request, so appending every request
+	// message here would duplicate the conversation on every turn. The agent
+	// persists only messages it creates itself (assistant replies and tool
+	// results).
 	outCh := make(chan core.Token, 128)
 
 	go func() {
@@ -87,29 +92,33 @@ func (a *DefaultAgent) runLoop(ctx context.Context, provider core.Provider, tool
 	currentReq := copyRequest(req)
 
 	for turn := 0; turn <= maxToolCalls; turn++ {
-		cacheKey := a.cacheKey(currentReq)
+		cacheKey := a.cacheKey(provider, currentReq)
 		if a.cache != nil {
 			if cached, ok := a.cache.Get(cacheKey); ok {
-				outCh <- core.Token{Content: cached}
-				outCh <- core.Token{Done: true}
+				a.send(ctx, outCh, core.Token{Content: cached})
+				a.send(ctx, outCh, core.Token{Done: true})
 				return
 			}
 		}
 
 		tokenCh, err := provider.Stream(ctx, currentReq)
 		if err != nil {
-			outCh <- core.Token{Error: fmt.Errorf("provider stream: %w", err), Done: true}
+			a.send(ctx, outCh, core.Token{Error: fmt.Errorf("provider stream: %w", err), Done: true})
 			return
 		}
 
 		var fullContent strings.Builder
 		var toolCall *core.ToolCall
 
+		// Native or text-parsed tool calls require a complete response before
+		// execution. Normal chat requests have no tools, so they take the fast
+		// path and are forwarded as soon as tokens arrive.
+		bufferForTools := tools != nil
 		buf := make([]core.Token, 0, 64)
 
 		for token := range tokenCh {
 			if token.Error != nil {
-				outCh <- token
+				a.send(ctx, outCh, token)
 				return
 			}
 
@@ -120,9 +129,12 @@ func (a *DefaultAgent) runLoop(ctx context.Context, provider core.Provider, tool
 
 			if token.Content != "" {
 				fullContent.WriteString(token.Content)
+				if bufferForTools {
+					buf = append(buf, token)
+				} else if !a.send(ctx, outCh, token) {
+					return
+				}
 			}
-
-			buf = append(buf, token)
 
 			if token.Done {
 				break
@@ -130,58 +142,63 @@ func (a *DefaultAgent) runLoop(ctx context.Context, provider core.Provider, tool
 		}
 
 		content := fullContent.String()
-		isToolCall := (toolCall != nil && tools != nil) || (parseTextToolCall(content, tools) != nil && tools != nil)
+		parsedToolCall := parseTextToolCall(content, tools)
+		isToolCall := tools != nil && (toolCall != nil || parsedToolCall != nil)
 
 		// If we've reached the max tool call limit, treat the response as final.
 		if turn == maxToolCalls && isToolCall {
-			// Max tool calls reached; emit whatever content was produced as the final answer.
 			for _, t := range buf {
-				if t.Content != "" {
-					outCh <- t
+				if t.Content != "" && !a.send(ctx, outCh, t) {
+					return
 				}
 			}
-			if a.session != nil && content != "" {
-				a.session.Append(core.Message{
-					Role:    core.RoleAssistant,
-					Content: content,
-				})
-			}
-			if a.cache != nil && content != "" {
-				a.cache.Set(cacheKey, content, 0)
-			}
-			outCh <- core.Token{Done: true}
+			a.finishResponse(ctx, outCh, cacheKey, content)
 			return
 		}
 
 		if isToolCall {
-			var tc *core.ToolCall
-			if toolCall != nil {
-				tc = toolCall
-			} else {
-				tc = parseTextToolCall(content, tools)
+			tc := toolCall
+			if tc == nil {
+				tc = parsedToolCall
 			}
-			a.onToolCall(ctx, tc, content, tools, currentReq, outCh)
+			if !a.onToolCall(ctx, tc, tools, currentReq, outCh) {
+				return
+			}
 			continue
 		}
 
-		for _, t := range buf {
-			if t.Content != "" {
-				outCh <- t
+		if bufferForTools {
+			for _, t := range buf {
+				if t.Content != "" && !a.send(ctx, outCh, t) {
+					return
+				}
 			}
 		}
 
-		if a.session != nil {
-			a.session.Append(core.Message{
-				Role:    core.RoleAssistant,
-				Content: content,
-			})
-		}
-		if a.cache != nil && content != "" {
-			a.cache.Set(cacheKey, content, 0)
-		}
-
-		outCh <- core.Token{Done: true}
+		a.finishResponse(ctx, outCh, cacheKey, content)
 		return
+	}
+}
+
+func (a *DefaultAgent) finishResponse(ctx context.Context, outCh chan<- core.Token, cacheKey, content string) {
+	if a.session != nil && content != "" {
+		a.session.Append(core.Message{
+			Role:    core.RoleAssistant,
+			Content: content,
+		})
+	}
+	if a.cache != nil && content != "" {
+		a.cache.Set(cacheKey, content, 0)
+	}
+	a.send(ctx, outCh, core.Token{Done: true})
+}
+
+func (a *DefaultAgent) send(ctx context.Context, outCh chan<- core.Token, token core.Token) bool {
+	select {
+	case outCh <- token:
+		return true
+	case <-ctx.Done():
+		return false
 	}
 }
 
@@ -201,15 +218,36 @@ func (a *DefaultAgent) executeTool(ctx context.Context, tc *core.ToolCall, reg c
 	return result
 }
 
-func (a *DefaultAgent) cacheKey(req *core.Request) string {
-	key := req.Model + "|" + fmt.Sprintf("%d|", req.MaxTokens)
-	for _, m := range req.Messages {
-		key += string(m.Role) + ":" + m.Content + "|"
-	}
-	return key
+type cacheRequest struct {
+	Model     string         `json:"model"`
+	Messages  []core.Message `json:"messages"`
+	Tools     []core.ToolDef `json:"tools,omitempty"`
+	MaxTokens int            `json:"max_tokens"`
+	Options   map[string]any `json:"options,omitempty"`
 }
 
-func (a *DefaultAgent) onToolCall(ctx context.Context, tc *core.ToolCall, content string, tools core.ToolRegistry, req *core.Request, outCh chan core.Token) {
+// cacheKey produces an unambiguous, bounded cache key. Provider and model are
+// included so a reply from one quality/configuration profile is never reused
+// for another.
+func (a *DefaultAgent) cacheKey(provider core.Provider, req *core.Request) string {
+	identity := cacheRequest{
+		Model:     req.Model,
+		Messages:  req.Messages,
+		Tools:     req.Tools,
+		MaxTokens: req.MaxTokens,
+		Options:   req.Options,
+	}
+	encoded, err := json.Marshal(identity)
+	if err != nil {
+		// Options are expected to be JSON-compatible. Preserve a safe fallback
+		// if a third-party caller supplies an unsupported value.
+		encoded = []byte(fmt.Sprintf("%q|%d|%v", req.Model, req.MaxTokens, req.Messages))
+	}
+	sum := sha256.Sum256(encoded)
+	return provider.Name() + ":" + hex.EncodeToString(sum[:])
+}
+
+func (a *DefaultAgent) onToolCall(ctx context.Context, tc *core.ToolCall, tools core.ToolRegistry, req *core.Request, outCh chan<- core.Token) bool {
 	logger.L().Debug("executing tool", "tool", tc.Name, "args", string(tc.Args))
 
 	result := a.executeTool(ctx, tc, tools)
@@ -218,8 +256,10 @@ func (a *DefaultAgent) onToolCall(ctx context.Context, tc *core.ToolCall, conten
 	if result.Status == core.StatusError {
 		statusIcon = "✗"
 	}
-	outCh <- core.Token{
+	if !a.send(ctx, outCh, core.Token{
 		Content: fmt.Sprintf("\n\n[%s Tool: %s]\n", statusIcon, tc.Name),
+	}) {
+		return false
 	}
 
 	toolResult := fmt.Sprintf("Tool %s returned:\n%s", tc.Name, result.Output)
@@ -237,6 +277,7 @@ func (a *DefaultAgent) onToolCall(ctx context.Context, tc *core.ToolCall, conten
 	if a.session != nil {
 		a.session.Append(toolMsg)
 	}
+	return true
 }
 
 func parseTextToolCall(content string, tools core.ToolRegistry) *core.ToolCall {

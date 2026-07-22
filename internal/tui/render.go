@@ -4,6 +4,7 @@ import (
 	"io"
 	"regexp"
 	"strings"
+	"unicode"
 
 	"github.com/mattn/go-runewidth"
 )
@@ -187,11 +188,21 @@ func (f *FrameWriter) flushComplete() {
 	}
 	s := f.buf.String()
 	idx := strings.LastIndexByte(s, '\n')
-	if idx < 0 {
-		return
+	var complete, rest string
+	if idx >= 0 {
+		complete = s[:idx]
+		rest = s[idx+1:]
+	} else {
+		// Providers often stream a complete paragraph without a newline. Once
+		// it reaches a display line, flush a safe word/rune boundary so the CLI
+		// visibly streams instead of appearing stalled until the final token.
+		cut := displayBreakIndex(s, f.width)
+		if cut == 0 {
+			return
+		}
+		complete = s[:cut]
+		rest = s[cut:]
 	}
-	complete := s[:idx]
-	rest := s[idx+1:]
 	f.buf.Reset()
 	f.buf.WriteString(rest)
 
@@ -199,6 +210,31 @@ func (f *FrameWriter) flushComplete() {
 	for _, line := range strings.Split(wrapped, "\n") {
 		f.writeString(RenderMarkdownLine(line) + "\n")
 	}
+}
+
+// displayBreakIndex returns a byte index at which s can be emitted as a
+// complete display line. It prefers whitespace but safely hard-splits a long
+// word at a rune boundary. Zero means the text has not reached width yet.
+func displayBreakIndex(s string, width int) int {
+	if width < 1 {
+		return 0
+	}
+	cells := 0
+	lastSpace := -1
+	for i, r := range s {
+		runeWidth := runewidth.RuneWidth(r)
+		if cells+runeWidth > width {
+			if lastSpace >= 0 {
+				return lastSpace + 1
+			}
+			return i
+		}
+		cells += runeWidth
+		if unicode.IsSpace(r) {
+			lastSpace = i
+		}
+	}
+	return 0
 }
 
 // Close flushes any remaining buffered text and prints the bottom rule.

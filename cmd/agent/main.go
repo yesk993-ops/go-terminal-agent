@@ -67,7 +67,11 @@ func main() {
 			opts = append(opts, agent.WithCache(cache.New(cfg.Cache.MaxSize, cfg.Cache.DefaultTTL)))
 		}
 		ag := agent.New(p, nil, opts...)
-		if err := runOnce(ag, prompt, os.Stdout); err != nil {
+		modelName := resolveProviderConfig(cfg, providerName, *modelFlag).Model
+		if modelName == "" {
+			modelName = "default"
+		}
+		if err := runOnce(ag, prompt, os.Stdout, modelName, cfg.Provider.MaxTokens, cfg.Provider.Temperature); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
@@ -116,7 +120,11 @@ func main() {
 		return nil
 	}
 
-	m := tui.New(ag, sess, providerName, modelName, setCore)
+	m := tui.New(ag, sess, providerName, modelName, setCore, tui.Settings{
+		MaxHistory:  cfg.UI.MaxHistoryUI,
+		MaxTokens:   cfg.Provider.MaxTokens,
+		Temperature: cfg.Provider.Temperature,
+	})
 	pModel := tea.NewProgram(m, tea.WithAltScreen())
 
 	sigCh := make(chan os.Signal, 1)
@@ -131,46 +139,56 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+	// Debounced persistence keeps the request path fast; make a graceful TUI
+	// exit durable immediately.
+	session.FlushSession(sess)
 }
 
 func resolveProviderConfig(cfg *core.Config, providerName, modelFlag string) core.ProviderConfig {
 	pCfg := core.ProviderConfig{Model: modelFlag}
+	// Never reuse another provider's credential. Besides being unsafe, that
+	// used to produce a slow, non-retryable authentication failure before a
+	// correctly configured fallback could be considered.
 	pCfg.APIKey = config.ResolveAPIKey(providerName, cfg)
-	if pCfg.APIKey == "" {
-		for _, pc := range cfg.Providers {
-			if pc.APIKey != "" {
-				pCfg.APIKey = pc.APIKey
-				break
-			}
+	for _, pc := range cfg.Providers {
+		if pc.Name != providerName {
+			continue
 		}
-	}
-	if pCfg.Model == "" {
-		for _, pc := range cfg.Providers {
-			if pc.Name == providerName && pc.Model != "" {
-				pCfg.Model = pc.Model
-				break
-			}
+		if pCfg.Model == "" {
+			pCfg.Model = pc.Model
 		}
+		pCfg.BaseURL = pc.BaseURL
+		break
 	}
 	return pCfg
 }
 
 func setupProvider(providerName string, cfg *core.Config, modelFlag string) core.Provider {
-	primary := provider.Get(providerName, resolveProviderConfig(cfg, providerName, modelFlag))
+	primaryCfg := resolveProviderConfig(cfg, providerName, modelFlag)
+	// A custom base URL may intentionally point to a local OpenAI-compatible
+	// service without an API key. Cloud providers still require their own key.
+	if primaryCfg.APIKey == "" && primaryCfg.BaseURL == "" {
+		return nil
+	}
+	primary := provider.Get(providerName, primaryCfg)
 	if primary == nil {
 		return nil
 	}
 
-	// Build a fallback chain: try primary first (with retry), then fall
-	// through other providers if rate limited.
+	// Build a fallback chain only from providers that are actually configured.
+	// Trying empty credentials adds avoidable authentication round trips to the
+	// user's first response after a rate limit.
 	fallbackOrder := []string{"openrouter", "nvidia", "groq", "openai", "anthropic", "gemini"}
 	var fallbacks []core.Provider
 	for _, fb := range fallbackOrder {
 		if fb == providerName {
 			continue // skip primary
 		}
-		p := provider.Get(fb, resolveProviderConfig(cfg, fb, ""))
-		if p != nil {
+		fbCfg := resolveProviderConfig(cfg, fb, "")
+		if fbCfg.APIKey == "" && fbCfg.BaseURL == "" {
+			continue
+		}
+		if p := provider.Get(fb, fbCfg); p != nil {
 			fallbacks = append(fallbacks, p)
 		}
 	}
@@ -205,11 +223,15 @@ func systemPromptFor(prompt string) string {
 	return core.SystemPrompt
 }
 
-func runOnce(ag core.Agent, prompt string, w io.Writer) (retErr error) {
+func runOnce(ag core.Agent, prompt string, w io.Writer, model string, maxTokens int, temperature float64) (retErr error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	if maxTokens <= 0 {
+		maxTokens = 8192
+	}
 
 	req := &core.Request{
+		Model: model,
 		Messages: []core.Message{
 			{
 				Role:    core.RoleSystem,
@@ -221,7 +243,10 @@ func runOnce(ag core.Agent, prompt string, w io.Writer) (retErr error) {
 			},
 		},
 		Stream:    true,
-		MaxTokens: 8192,
+		MaxTokens: maxTokens,
+		Options: map[string]any{
+			"temperature": temperature,
+		},
 	}
 
 	ch, err := ag.Run(ctx, req)

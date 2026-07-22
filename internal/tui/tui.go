@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/agent/ai-terminal/internal/core"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -18,13 +19,27 @@ type chatMsg struct {
 }
 
 type tokenMsg struct {
+	id      uint64
 	content string
 	done    bool
 	err     error
 }
 
 type errMsg struct {
+	id  uint64
 	err error
+}
+
+type flushStreamMsg struct {
+	id uint64
+}
+
+// Settings controls rendering and request behavior without requiring callers
+// to trade response quality for UI responsiveness.
+type Settings struct {
+	MaxHistory int
+	MaxTokens  int
+	Temperature float64
 }
 
 type model struct {
@@ -47,7 +62,19 @@ type model struct {
 	width        int
 	height       int
 	tokenCh      <-chan core.Token
+	streamID     uint64
 	showThinking bool
+	maxHistory   int
+	maxTokens    int
+	temperature  float64
+
+	// Completed messages are rendered once per width/history mutation. The
+	// active answer is rendered at a modest frame rate, rather than rebuilding
+	// the entire transcript once for every streamed token.
+	historyRendered       string
+	historyDirty          bool
+	streamContent         strings.Builder
+	streamFlushScheduled  bool
 }
 
 var placeholderTexts = []string{
@@ -66,8 +93,9 @@ var placeholderTexts = []string{
 // Fixed chrome: one line for the title bar, one for the divider, one for the
 // input. Everything between them is the scrollable chat viewport.
 const chromeHeight = 3
+const streamRefreshInterval = 33 * time.Millisecond
 
-func New(agent core.Agent, session core.Session, provider, modelName string, setCore func(provider, model string) error) tea.Model {
+func New(agent core.Agent, session core.Session, provider, modelName string, setCore func(provider, model string) error, settings Settings) tea.Model {
 	s := spinner.New()
 	s.Style = SpinnerStyle
 	s.Spinner = spinner.Dot
@@ -79,22 +107,32 @@ func New(agent core.Agent, session core.Session, provider, modelName string, set
 	ti.CharLimit = 0
 	ti.Width = 80
 
-	chat := make([]chatMsg, 0, 1000)
+	if settings.MaxHistory <= 0 {
+		settings.MaxHistory = 50
+	}
+	if settings.MaxTokens <= 0 {
+		settings.MaxTokens = 8192
+	}
+	chat := make([]chatMsg, 0, settings.MaxHistory)
 	chat = append(chat, chatMsg{
 		role:    core.RoleAssistant,
 		content: "Hello! How can I help you today?",
 	})
 
 	return &model{
-		agent:     agent,
-		session:   session,
-		provider:  provider,
-		modelName: modelName,
-		setCore:   setCore,
-		input:     ti,
-		spinner:   s,
-		chat:      chat,
-		ctx:       context.Background(),
+		agent:        agent,
+		session:      session,
+		provider:     provider,
+		modelName:    modelName,
+		setCore:      setCore,
+		input:        ti,
+		spinner:      s,
+		chat:         chat,
+		ctx:          context.Background(),
+		maxHistory:   settings.MaxHistory,
+		maxTokens:    settings.MaxTokens,
+		temperature:  settings.Temperature,
+		historyDirty: true,
 	}
 }
 
@@ -118,6 +156,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.input.Width < 20 {
 			m.input.Width = 20
 		}
+		m.historyDirty = true
 		m.refreshChat()
 		return m, nil
 
@@ -129,8 +168,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.cancel()
 					m.cancel = nil
 				}
+				m.finishActiveAssistant()
 				m.loading = false
-				m.chat = append(m.chat, chatMsg{role: core.RoleAssistant, content: "[Session cancelled]"})
+				m.appendChat(core.RoleAssistant, "[Session cancelled]")
 				m.refreshChat()
 				return m, nil
 			}
@@ -150,14 +190,23 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, cmd
 			}
 
-			m.chat = append(m.chat, chatMsg{role: core.RoleUser, content: input})
+			userMessage := core.Message{Role: core.RoleUser, Content: input}
+			if m.session != nil {
+				// A session records each user turn exactly once. Agent.Run receives
+				// the assembled history but deliberately does not append it again.
+				m.session.Append(userMessage)
+			}
+			m.appendChat(core.RoleUser, input)
+			m.streamContent.Reset()
 			m.loading = true
 			m.refreshChat()
 
-			ctx, cancel := context.WithCancel(m.ctx)
-			m.cancel = cancel
+				ctx, cancel := context.WithCancel(m.ctx)
+				m.cancel = cancel
+				m.streamID++
+				streamID := m.streamID
 
-			return m, tea.Batch(m.startStream(ctx, input), m.spinner.Tick)
+				return m, tea.Batch(m.startStream(ctx, input, streamID), m.spinner.Tick)
 
 		// Scroll keys go to the viewport; everything else (letters,
 		// punctuation, backspace, ...) is typed into the input.
@@ -167,43 +216,64 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case streamStartedMsg:
+		if msg.id != m.streamID || !m.loading {
+			return m, nil
+		}
 		m.tokenCh = msg.ch
-		return m, m.nextToken()
+		return m, m.nextToken(msg.id, msg.ch)
 
 	case tokenMsg:
+		if msg.id != m.streamID || !m.loading {
+			return m, nil
+		}
 		if msg.err != nil {
+			m.finishActiveAssistant()
 			m.loading = false
-			m.chat = append(m.chat, chatMsg{role: core.RoleAssistant, content: fmt.Sprintf("Error: %v", msg.err)})
-			if m.cancel != nil {
-				m.cancel()
-				m.cancel = nil
-			}
+			m.appendChat(core.RoleAssistant, fmt.Sprintf("Error: %v", msg.err))
+			m.cancelActiveRequest()
 			m.refreshChat()
 			return m, nil
 		}
 
 		if msg.done {
+			m.finishActiveAssistant()
 			m.loading = false
 			m.tokenCh = nil
-			// Drop the cancel func so a later request can't accidentally
-			// cancel a stream that's already finished.
-			m.cancel = nil
+			m.cancelActiveRequest()
 			m.refreshChat()
 			return m, nil
 		}
 
-		if len(m.chat) > 0 && m.chat[len(m.chat)-1].role == core.RoleAssistant {
-			m.chat[len(m.chat)-1].content += msg.content
-		} else {
-			m.chat = append(m.chat, chatMsg{role: core.RoleAssistant, content: msg.content})
+		if msg.content != "" {
+			m.streamContent.WriteString(msg.content)
+			cmds := []tea.Cmd{m.nextToken(msg.id, m.tokenCh)}
+			if !m.streamFlushScheduled {
+				m.streamFlushScheduled = true
+				cmds = append(cmds, flushStreamAfter(streamRefreshInterval, msg.id))
+			}
+			return m, tea.Batch(cmds...)
 		}
-		m.refreshChat()
-		return m, m.nextToken()
+		return m, m.nextToken(msg.id, m.tokenCh)
+
+	case flushStreamMsg:
+		if msg.id != m.streamID {
+			return m, nil
+		}
+		m.streamFlushScheduled = false
+		if m.loading {
+			m.refreshChat()
+		}
+		return m, nil
 
 	case errMsg:
+		if msg.id != m.streamID || !m.loading {
+			return m, nil
+		}
+		m.finishActiveAssistant()
 		m.loading = false
 		m.err = msg.err
-		m.chat = append(m.chat, chatMsg{role: core.RoleAssistant, content: fmt.Sprintf("Error: %v", msg.err)})
+		m.appendChat(core.RoleAssistant, fmt.Sprintf("Error: %v", msg.err))
+		m.cancelActiveRequest()
 		m.refreshChat()
 		return m, nil
 
@@ -214,6 +284,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
+		// refreshChat uses a cached completed transcript, so keeping the spinner
+		// lively no longer causes all prior messages to be wrapped again.
 		m.refreshChat()
 		return m, cmd
 	}
@@ -221,6 +293,31 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	return m, cmd
+}
+
+func flushStreamAfter(delay time.Duration, streamID uint64) tea.Cmd {
+	return tea.Tick(delay, func(time.Time) tea.Msg { return flushStreamMsg{id: streamID} })
+}
+
+func (m *model) appendChat(role core.Role, content string) {
+	m.chat = append(m.chat, chatMsg{role: role, content: content})
+	m.historyDirty = true
+}
+
+func (m *model) finishActiveAssistant() {
+	if m.streamContent.Len() == 0 {
+		return
+	}
+	m.appendChat(core.RoleAssistant, m.streamContent.String())
+	m.streamContent.Reset()
+	m.streamFlushScheduled = false
+}
+
+func (m *model) cancelActiveRequest() {
+	if m.cancel != nil {
+		m.cancel()
+		m.cancel = nil
+	}
 }
 
 // scrollViewport forwards a scroll key to the chat viewport so the user can
@@ -267,8 +364,8 @@ func (m *model) divider() string {
 	return DividerStyle.Render(strings.Repeat("─", w))
 }
 
-// refreshChat rebuilds the transcript and keeps the viewport pinned to the
-// newest content, the way a normal chat app behaves.
+// refreshChat rebuilds only the dynamic part of the transcript. Completed
+// messages stay cached until a chat mutation or resize changes their layout.
 func (m *model) refreshChat() {
 	if !m.ready {
 		return
@@ -277,16 +374,15 @@ func (m *model) refreshChat() {
 	m.viewport.GotoBottom()
 }
 
-// transcript renders the chat history as one plain-ish string for the
-// viewport. Each message is wrapped exactly once, before any ANSI styling is
-// applied, so colors never leak across wrapped lines.
-func (m *model) transcript() string {
-	var b strings.Builder
+func (m *model) completedTranscript() string {
+	if !m.historyDirty {
+		return m.historyRendered
+	}
 
+	var b strings.Builder
 	visible := m.chat
-	const maxHistory = 1000
-	if len(visible) > maxHistory {
-		visible = visible[len(visible)-maxHistory:]
+	if len(visible) > m.maxHistory {
+		visible = visible[len(visible)-m.maxHistory:]
 	}
 
 	w := m.width - 2
@@ -307,6 +403,31 @@ func (m *model) transcript() string {
 		b.WriteByte('\n')
 	}
 
+	m.historyRendered = b.String()
+	m.historyDirty = false
+	return m.historyRendered
+}
+
+// transcript renders a cached completed history plus the in-progress answer.
+// Each completed message is wrapped once per meaningful UI change, not once
+// per provider token.
+func (m *model) transcript() string {
+	var b strings.Builder
+	completed := m.completedTranscript()
+	b.WriteString(completed)
+
+	if m.streamContent.Len() > 0 {
+		if completed != "" {
+			b.WriteByte('\n')
+		}
+		w := m.width - 2
+		if w < 20 {
+			w = 20
+		}
+		b.WriteString(RenderAssistantMessage(m.streamContent.String(), w))
+		b.WriteByte('\n')
+	}
+
 	if m.loading {
 		b.WriteByte('\n')
 		b.WriteString(m.spinner.View() + " Thinking...")
@@ -317,67 +438,72 @@ func (m *model) transcript() string {
 }
 
 type streamStartedMsg struct {
+	id uint64
 	ch <-chan core.Token
 }
 
-func (m *model) startStream(ctx context.Context, input string) tea.Cmd {
+func (m *model) startStream(ctx context.Context, input string, streamID uint64) tea.Cmd {
 	return func() tea.Msg {
 		prompt := core.SystemPrompt
 		if m.showThinking {
 			prompt += "\n\nBefore answering, think step by step in a clear chain-of-thought. Show your reasoning inside <thinking>...</thinking> tags, then provide your final answer."
 		}
 
-		req := &core.Request{
-			Messages: []core.Message{
-				{
-					Role:    core.RoleSystem,
-					Content: prompt,
-				},
-				{
-					Role:    core.RoleUser,
-					Content: input,
-				},
-			},
-			Stream:    true,
-			MaxTokens: 8192,
+		messages := []core.Message{{
+			Role:    core.RoleSystem,
+			Content: prompt,
+		}}
+		if m.session != nil {
+			sessionMsgs := m.session.Messages()
+			conversation := make([]core.Message, 0, len(sessionMsgs))
+			for _, msg := range sessionMsgs {
+				// Older releases persisted system prompts. Excluding those from
+				// history avoids sending duplicated static instructions forever.
+				if msg.Role != core.RoleSystem {
+					conversation = append(conversation, msg)
+				}
+			}
+			const maxContextMessages = 200
+			if len(conversation) > maxContextMessages {
+				conversation = conversation[len(conversation)-maxContextMessages:]
+			}
+			messages = append(messages, conversation...)
+		} else {
+			messages = append(messages, core.Message{Role: core.RoleUser, Content: input})
 		}
 
-		sessionMsgs := m.session.Messages()
-		if len(sessionMsgs) > 0 {
-			start := 0
-			if len(sessionMsgs) > 200 {
-				start = len(sessionMsgs) - 200
-			}
-			// Preallocate and build the message list in one pass.
-			msgs := make([]core.Message, 0, len(sessionMsgs)-start+2)
-			msgs = append(msgs, req.Messages[0])
-			msgs = append(msgs, sessionMsgs[start:]...)
-			msgs = append(msgs, core.Message{Role: core.RoleUser, Content: input})
-			req.Messages = msgs
+		req := &core.Request{
+			Model:     m.modelName,
+			Messages:  messages,
+			Stream:    true,
+			MaxTokens: m.maxTokens,
+			Options: map[string]any{
+				"temperature": m.temperature,
+			},
 		}
 
 		tokenCh, err := m.agent.Run(ctx, req)
 		if err != nil {
-			return errMsg{err: err}
+			return errMsg{id: streamID, err: err}
 		}
 
-		return streamStartedMsg{ch: tokenCh}
+		return streamStartedMsg{id: streamID, ch: tokenCh}
 	}
 }
 
-func (m *model) nextToken() tea.Cmd {
+func (m *model) nextToken(streamID uint64, tokenCh <-chan core.Token) tea.Cmd {
 	return func() tea.Msg {
-		token, ok := <-m.tokenCh
+		token, ok := <-tokenCh
 		if !ok {
-			return tokenMsg{done: true}
+			return tokenMsg{id: streamID, done: true}
 		}
 		if token.Error != nil {
-			return errMsg{err: token.Error}
+			return tokenMsg{id: streamID, err: token.Error}
 		}
 		if token.Done {
-			return tokenMsg{done: true}
+			return tokenMsg{id: streamID, done: true}
 		}
-		return tokenMsg{content: token.Content}
+		return tokenMsg{id: streamID, content: token.Content}
 	}
 }
 
@@ -392,40 +518,44 @@ func (m *model) handleCommand(input string) tea.Cmd {
 	switch cmd {
 	case "/provider":
 		if arg == "" {
-			m.chat = append(m.chat, chatMsg{role: core.RoleAssistant, content: "Usage: /provider <name> (nvidia, groq, openai, anthropic, gemini, openrouter)"})
+			m.appendChat(core.RoleAssistant, "Usage: /provider <name> (nvidia, groq, openai, anthropic, gemini, openrouter)")
 			return nil
 		}
 		if m.setCore != nil {
 			if err := m.setCore(arg, ""); err != nil {
-				m.chat = append(m.chat, chatMsg{role: core.RoleAssistant, content: fmt.Sprintf("Error switching provider: %v", err)})
+				m.appendChat(core.RoleAssistant, fmt.Sprintf("Error switching provider: %v", err))
 				return nil
 			}
 		}
 		m.provider = arg
-		m.chat = append(m.chat, chatMsg{role: core.RoleAssistant, content: fmt.Sprintf("Switched provider to: %s", arg)})
+		m.appendChat(core.RoleAssistant, fmt.Sprintf("Switched provider to: %s", arg))
 		return nil
 
 	case "/model":
 		if arg == "" {
-			m.chat = append(m.chat, chatMsg{role: core.RoleAssistant, content: fmt.Sprintf("Current model: %s", m.modelName)})
+			m.appendChat(core.RoleAssistant, fmt.Sprintf("Current model: %s", m.modelName))
 			return nil
 		}
 		if m.setCore != nil {
 			if err := m.setCore("", arg); err != nil {
-				m.chat = append(m.chat, chatMsg{role: core.RoleAssistant, content: fmt.Sprintf("Error switching model: %v", err)})
+				m.appendChat(core.RoleAssistant, fmt.Sprintf("Error switching model: %v", err))
 				return nil
 			}
 		}
 		m.modelName = arg
-		m.chat = append(m.chat, chatMsg{role: core.RoleAssistant, content: fmt.Sprintf("Switched model to: %s", arg)})
+		m.appendChat(core.RoleAssistant, fmt.Sprintf("Switched model to: %s", arg))
 		return nil
 
 	case "/help":
-		m.chat = append(m.chat, chatMsg{role: core.RoleAssistant, content: "Commands:\n  /provider <name>  - Switch provider (nvidia, groq, openai, etc.)\n  /model <name>     - Switch model\n  /think            - Toggle chain-of-thought reasoning\n  /clear            - Clear chat\n  /status           - Show current provider/model\n  /help             - Show this help\n  /exit, /quit      - Exit the program"})
+		m.appendChat(core.RoleAssistant, "Commands:\n  /provider <name>  - Switch provider (nvidia, groq, openai, etc.)\n  /model <name>     - Switch model\n  /think            - Toggle chain-of-thought reasoning\n  /clear            - Clear chat\n  /status           - Show current provider/model\n  /help             - Show this help\n  /exit, /quit      - Exit the program")
 		return nil
 
 	case "/clear":
 		m.chat = m.chat[:0]
+		m.historyDirty = true
+		if m.session != nil {
+			m.session.Clear()
+		}
 		return nil
 
 	case "/status":
@@ -433,7 +563,7 @@ func (m *model) handleCommand(input string) tea.Cmd {
 		if m.showThinking {
 			thinking = "on"
 		}
-		m.chat = append(m.chat, chatMsg{role: core.RoleAssistant, content: fmt.Sprintf("Provider: %s\nModel: %s\nThinking: %s", m.provider, m.modelName, thinking)})
+		m.appendChat(core.RoleAssistant, fmt.Sprintf("Provider: %s\nModel: %s\nThinking: %s", m.provider, m.modelName, thinking))
 		return nil
 
 	case "/think":
@@ -442,19 +572,17 @@ func (m *model) handleCommand(input string) tea.Cmd {
 		if !m.showThinking {
 			status = "disabled"
 		}
-		m.chat = append(m.chat, chatMsg{role: core.RoleAssistant, content: fmt.Sprintf("Chain-of-thought thinking %s.", status)})
+		m.appendChat(core.RoleAssistant, fmt.Sprintf("Chain-of-thought thinking %s.", status))
 		return nil
 
 	case "/exit", "/quit":
 		// Cancel any in-flight stream so the streaming goroutine doesn't
 		// outlive the program and try to push messages into a dead TUI.
-		if m.loading && m.cancel != nil {
-			m.cancel()
-		}
+		m.cancelActiveRequest()
 		return tea.Quit
 
 	default:
-		m.chat = append(m.chat, chatMsg{role: core.RoleAssistant, content: fmt.Sprintf("Unknown command: %s\nType /help for available commands.", cmd)})
+		m.appendChat(core.RoleAssistant, fmt.Sprintf("Unknown command: %s\nType /help for available commands.", cmd))
 		return nil
 	}
 }
