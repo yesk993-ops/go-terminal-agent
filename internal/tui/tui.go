@@ -127,6 +127,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.loading {
 				if m.cancel != nil {
 					m.cancel()
+					m.cancel = nil
 				}
 				m.loading = false
 				m.chat = append(m.chat, chatMsg{role: core.RoleAssistant, content: "[Session cancelled]"})
@@ -175,6 +176,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.chat = append(m.chat, chatMsg{role: core.RoleAssistant, content: fmt.Sprintf("Error: %v", msg.err)})
 			if m.cancel != nil {
 				m.cancel()
+				m.cancel = nil
 			}
 			m.refreshChat()
 			return m, nil
@@ -183,6 +185,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.done {
 			m.loading = false
 			m.tokenCh = nil
+			// Drop the cancel func so a later request can't accidentally
+			// cancel a stream that's already finished.
+			m.cancel = nil
 			m.refreshChat()
 			return m, nil
 		}
@@ -441,6 +446,11 @@ func (m *model) handleCommand(input string) tea.Cmd {
 		return nil
 
 	case "/exit", "/quit":
+		// Cancel any in-flight stream so the streaming goroutine doesn't
+		// outlive the program and try to push messages into a dead TUI.
+		if m.loading && m.cancel != nil {
+			m.cancel()
+		}
 		return tea.Quit
 
 	default:
