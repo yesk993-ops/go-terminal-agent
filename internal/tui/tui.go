@@ -79,7 +79,7 @@ func New(agent core.Agent, session core.Session, provider, modelName string, set
 	ti.CharLimit = 0
 	ti.Width = 80
 
-	chat := make([]chatMsg, 0, 100)
+	chat := make([]chatMsg, 0, 1000)
 	chat = append(chat, chatMsg{
 		role:    core.RoleAssistant,
 		content: "Hello! How can I help you today?",
@@ -279,7 +279,7 @@ func (m *model) transcript() string {
 	var b strings.Builder
 
 	visible := m.chat
-	const maxHistory = 100
+	const maxHistory = 1000
 	if len(visible) > maxHistory {
 		visible = visible[len(visible)-maxHistory:]
 	}
@@ -340,8 +340,8 @@ func (m *model) startStream(ctx context.Context, input string) tea.Cmd {
 		sessionMsgs := m.session.Messages()
 		if len(sessionMsgs) > 0 {
 			start := 0
-			if len(sessionMsgs) > 50 {
-				start = len(sessionMsgs) - 50
+			if len(sessionMsgs) > 200 {
+				start = len(sessionMsgs) - 200
 			}
 			// Preallocate and build the message list in one pass.
 			msgs := make([]core.Message, 0, len(sessionMsgs)-start+2)
