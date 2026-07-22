@@ -48,6 +48,7 @@ func (p *anthropicProvider) Stream(ctx context.Context, req *core.Request) (<-ch
 
 	headers := map[string]string{
 		"anthropic-version": "2023-06-01",
+		"x-api-key":         p.apiKey,
 	}
 
 	resp, err := p.doPost(ctx, p.baseURL+"/messages", chatReq, headers)
