@@ -132,6 +132,27 @@ func (a *DefaultAgent) runLoop(ctx context.Context, provider core.Provider, tool
 		content := fullContent.String()
 		isToolCall := (toolCall != nil && tools != nil) || (parseTextToolCall(content, tools) != nil && tools != nil)
 
+		// If we've reached the max tool call limit, treat the response as final.
+		if turn == maxToolCalls && isToolCall {
+			// Max tool calls reached; emit whatever content was produced as the final answer.
+			for _, t := range buf {
+				if t.Content != "" {
+					outCh <- t
+				}
+			}
+			if a.session != nil && content != "" {
+				a.session.Append(core.Message{
+					Role:    core.RoleAssistant,
+					Content: content,
+				})
+			}
+			if a.cache != nil && content != "" {
+				a.cache.Set(cacheKey, content, 0)
+			}
+			outCh <- core.Token{Done: true}
+			return
+		}
+
 		if isToolCall {
 			var tc *core.ToolCall
 			if toolCall != nil {
@@ -181,7 +202,7 @@ func (a *DefaultAgent) executeTool(ctx context.Context, tc *core.ToolCall, reg c
 }
 
 func (a *DefaultAgent) cacheKey(req *core.Request) string {
-	key := req.Model + "|"
+	key := req.Model + "|" + fmt.Sprintf("%d|", req.MaxTokens)
 	for _, m := range req.Messages {
 		key += string(m.Role) + ":" + m.Content + "|"
 	}

@@ -49,7 +49,12 @@ func (t *editTool) Execute(ctx context.Context, args json.RawMessage) *core.Tool
 		return &core.ToolResult{Status: core.StatusError, Error: "invalid arguments: " + err.Error()}
 	}
 
-	data, err := os.ReadFile(params.FilePath)
+	safePath, err := resolveSafePath(params.FilePath)
+	if err != nil {
+		return &core.ToolResult{Status: core.StatusError, Error: err.Error()}
+	}
+
+	data, err := os.ReadFile(safePath)
 	if err != nil {
 		return &core.ToolResult{Status: core.StatusError, Error: fmt.Sprintf("read file: %v", err)}
 	}
@@ -61,12 +66,12 @@ func (t *editTool) Execute(ctx context.Context, args json.RawMessage) *core.Tool
 
 	newContent := strings.Replace(content, params.OldString, params.NewString, 1)
 
-	if err := os.WriteFile(params.FilePath, []byte(newContent), 0644); err != nil {
+	if err := os.WriteFile(safePath, []byte(newContent), 0644); err != nil {
 		return &core.ToolResult{Status: core.StatusError, Error: fmt.Sprintf("write file: %v", err)}
 	}
 
 	return &core.ToolResult{
 		Status: core.StatusSuccess,
-		Output: fmt.Sprintf("Edited %s (replaced %d chars with %d chars)", params.FilePath, len(params.OldString), len(params.NewString)),
+		Output: fmt.Sprintf("Edited %s (replaced %d chars with %d chars)", safePath, len(params.OldString), len(params.NewString)),
 	}
 }

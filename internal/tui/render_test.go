@@ -60,7 +60,9 @@ func TestFrameWriterTopAndBottomRules(t *testing.T) {
 	var b strings.Builder
 	fw := NewFrameWriter(&b, 20, 20)
 	fw.Write("hello world\n")
-	fw.Close()
+	if err := fw.Close(); err != nil {
+		t.Fatalf("unexpected close error: %v", err)
+	}
 
 	out := b.String()
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
@@ -80,7 +82,9 @@ func TestFrameWriterOpenSides(t *testing.T) {
 	var b strings.Builder
 	fw := NewFrameWriter(&b, 20, 20)
 	fw.Write("content line\n")
-	fw.Close()
+	if err := fw.Close(); err != nil {
+		t.Fatalf("unexpected close error: %v", err)
+	}
 
 	for _, line := range strings.Split(b.String(), "\n") {
 		if strings.HasPrefix(line, "│") || strings.HasSuffix(strings.TrimRight(line, " "), "│") {
@@ -93,7 +97,9 @@ func TestFrameWriterNoContentNoFrame(t *testing.T) {
 	var b strings.Builder
 	fw := NewFrameWriter(&b, 20, 20)
 	// Never call Write.
-	fw.Close()
+	if err := fw.Close(); err != nil {
+		t.Fatalf("unexpected close error: %v", err)
+	}
 	if b.Len() != 0 {
 		t.Errorf("expected no output when no content written, got %q", b.String())
 	}
@@ -104,7 +110,9 @@ func TestFrameWriterFlushesPartialOnClose(t *testing.T) {
 	fw := NewFrameWriter(&b, 40, 40)
 	// No trailing newline; must still be flushed by Close.
 	fw.Write("partial line without newline")
-	fw.Close()
+	if err := fw.Close(); err != nil {
+		t.Fatalf("unexpected close error: %v", err)
+	}
 	if !strings.Contains(b.String(), "partial line without newline") {
 		t.Errorf("partial line not flushed on close: %q", b.String())
 	}

@@ -186,12 +186,14 @@ func ResolveAPIKey(providerName string, cfg *core.Config) string {
 		"openrouter": "OPENROUTER_API_KEY",
 	}
 
+	// 1. Check environment variable for this specific provider.
 	if k := os.Getenv(envKeys[providerName]); k != "" {
 		return k
 	}
 
+	// 2. Check config for this specific provider.
 	for _, pc := range cfg.Providers {
-		if pc.APIKey != "" {
+		if pc.Name == providerName && pc.APIKey != "" {
 			return pc.APIKey
 		}
 	}
@@ -199,6 +201,4 @@ func ResolveAPIKey(providerName string, cfg *core.Config) string {
 	return ""
 }
 
-func init() {
-	_ = os.MkdirAll(defaultSessionPath(), 0755)
-}
+

@@ -291,13 +291,10 @@ func (m *model) startStream(ctx context.Context, input string) tea.Cmd {
 			if len(sessionMsgs) > 50 {
 				start = len(sessionMsgs) - 50
 			}
-			prev := make([]core.Message, 0, len(sessionMsgs[start:]))
-			for _, sm := range sessionMsgs[start:] {
-				prev = append(prev, sm)
-			}
-			msgs := make([]core.Message, 0, len(prev)+2)
+			// Preallocate and build the message list in one pass.
+			msgs := make([]core.Message, 0, len(sessionMsgs)-start+2)
 			msgs = append(msgs, req.Messages[0])
-			msgs = append(msgs, prev...)
+			msgs = append(msgs, sessionMsgs[start:]...)
 			msgs = append(msgs, core.Message{Role: core.RoleUser, Content: input})
 			req.Messages = msgs
 		}

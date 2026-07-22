@@ -140,6 +140,7 @@ type FrameWriter struct {
 	ruleWidth int
 	buf       strings.Builder
 	started   bool
+	lastErr   error
 }
 
 // NewFrameWriter creates a FrameWriter. ruleWidth is typically the full
@@ -158,13 +159,20 @@ func (f *FrameWriter) rule() string {
 	return FrameStyle.Render(strings.Repeat("─", f.ruleWidth))
 }
 
+func (f *FrameWriter) writeString(s string) {
+	if f.lastErr != nil {
+		return
+	}
+	_, f.lastErr = io.WriteString(f.w, s)
+}
+
 // Write accepts a chunk of answer text, flushing any newly complete lines.
 func (f *FrameWriter) Write(chunk string) {
-	if chunk == "" {
+	if chunk == "" || f.lastErr != nil {
 		return
 	}
 	if !f.started {
-		io.WriteString(f.w, f.rule()+"\n")
+		f.writeString(f.rule() + "\n")
 		f.started = true
 	}
 	f.buf.WriteString(chunk)
@@ -174,6 +182,9 @@ func (f *FrameWriter) Write(chunk string) {
 // flushComplete wraps and prints every complete line currently buffered,
 // keeping the trailing partial line (no newline yet) in the buffer.
 func (f *FrameWriter) flushComplete() {
+	if f.lastErr != nil {
+		return
+	}
 	s := f.buf.String()
 	idx := strings.LastIndexByte(s, '\n')
 	if idx < 0 {
@@ -186,23 +197,27 @@ func (f *FrameWriter) flushComplete() {
 
 	wrapped := WrapText(complete, f.width)
 	for _, line := range strings.Split(wrapped, "\n") {
-		io.WriteString(f.w, RenderMarkdownLine(line)+"\n")
+		f.writeString(RenderMarkdownLine(line) + "\n")
 	}
 }
 
 // Close flushes any remaining buffered text and prints the bottom rule.
-func (f *FrameWriter) Close() {
+// Returns any write error that occurred during the lifetime of the writer.
+func (f *FrameWriter) Close() error {
 	if !f.started {
 		// No content ever arrived (e.g. an error before any token); emit
 		// nothing so the frame only ever wraps a real answer.
-		return
+		return f.lastErr
 	}
-	if rest := strings.TrimRight(f.buf.String(), " "); rest != "" {
-		wrapped := WrapText(rest, f.width)
-		for _, line := range strings.Split(wrapped, "\n") {
-			io.WriteString(f.w, RenderMarkdownLine(line)+"\n")
+	if f.lastErr == nil {
+		if rest := strings.TrimRight(f.buf.String(), " "); rest != "" {
+			wrapped := WrapText(rest, f.width)
+			for _, line := range strings.Split(wrapped, "\n") {
+				f.writeString(RenderMarkdownLine(line) + "\n")
+			}
 		}
 	}
 	f.buf.Reset()
-	io.WriteString(f.w, f.rule()+"\n")
+	f.writeString(f.rule() + "\n")
+	return f.lastErr
 }

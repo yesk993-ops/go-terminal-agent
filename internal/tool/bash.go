@@ -99,14 +99,26 @@ func (t *bashTool) Execute(ctx context.Context, args json.RawMessage) *core.Tool
 	err := cmd.Run()
 
 	var output strings.Builder
-	if stdout.Len() > 0 {
-		output.WriteString(stdout.String())
+	outStr := stdout.String()
+	errStr := stderr.String()
+
+	// Truncate excessively large outputs to prevent memory issues.
+	const maxOutput = 50000
+	if len(outStr) > maxOutput {
+		outStr = outStr[:maxOutput] + "\n... (stdout truncated)"
 	}
-	if stderr.Len() > 0 {
+	if len(errStr) > maxOutput {
+		errStr = errStr[:maxOutput] + "\n... (stderr truncated)"
+	}
+
+	if len(outStr) > 0 {
+		output.WriteString(outStr)
+	}
+	if len(errStr) > 0 {
 		if output.Len() > 0 {
 			output.WriteString("\n")
 		}
-		output.WriteString("stderr: " + stderr.String())
+		output.WriteString("stderr: " + errStr)
 	}
 
 	if err != nil {

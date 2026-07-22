@@ -34,8 +34,14 @@ func (f *fallbackProvider) Name() string {
 
 func (f *fallbackProvider) Stream(ctx context.Context, req *core.Request) (<-chan core.Token, error) {
 	for idx, prov := range f.providers {
+		// Check context before trying each provider.
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
 		if idx > 0 {
-			// We're falling back — send status token to user
 			prevName := f.providers[idx-1].Name()
 			logger.L().Warn("falling back",
 				"from", prevName,
@@ -48,15 +54,31 @@ func (f *fallbackProvider) Stream(ctx context.Context, req *core.Request) (<-cha
 			if idx == 0 {
 				return ch, nil
 			}
-			// Need to wrap with status message
+			// Wrap with status message; handle context cancellation.
 			out := make(chan core.Token, 64)
 			go func(prev, curr string, in <-chan core.Token) {
 				defer close(out)
-				out <- core.Token{
+				select {
+				case out <- core.Token{
 					Content: fmt.Sprintf("\n[Unavailable: %s, switching to %s...]\n", prev, curr),
+				}:
+				case <-ctx.Done():
+					return
 				}
-				for tok := range in {
-					out <- tok
+				for {
+					select {
+					case tok, ok := <-in:
+						if !ok {
+							return
+						}
+						select {
+						case out <- tok:
+						case <-ctx.Done():
+							return
+						}
+					case <-ctx.Done():
+						return
+					}
 				}
 			}(f.providers[idx-1].Name(), prov.Name(), ch)
 			return out, nil

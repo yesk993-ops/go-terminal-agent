@@ -170,6 +170,12 @@ func streamOpenAICompatibleSSE(ctx context.Context, resp *http.Response) (<-chan
 		defer close(tokenCh)
 		defer resp.Body.Close()
 
+		// Ensure body is closed on context cancellation even if blocked on read.
+		go func() {
+			<-ctx.Done()
+			resp.Body.Close()
+		}()
+
 		scanner := bufio.NewScanner(resp.Body)
 		scanner.Buffer(make([]byte, 0, 64*1024), 256*1024)
 
@@ -280,6 +286,12 @@ func streamGeminiSSE(ctx context.Context, resp *http.Response) (<-chan core.Toke
 		defer close(tokenCh)
 		defer resp.Body.Close()
 
+		// Ensure body is closed on context cancellation even if blocked on read.
+		go func() {
+			<-ctx.Done()
+			resp.Body.Close()
+		}()
+
 		scanner := bufio.NewScanner(resp.Body)
 		scanner.Buffer(make([]byte, 0, 64*1024), 256*1024)
 
@@ -349,6 +361,12 @@ func streamAnthropicSSE(ctx context.Context, resp *http.Response) (<-chan core.T
 	go func() {
 		defer close(tokenCh)
 		defer resp.Body.Close()
+
+		// Ensure body is closed on context cancellation even if blocked on read.
+		go func() {
+			<-ctx.Done()
+			resp.Body.Close()
+		}()
 
 		scanner := bufio.NewScanner(resp.Body)
 		scanner.Buffer(make([]byte, 0, 64*1024), 256*1024)
