@@ -71,7 +71,7 @@ ui:
 # ─── Session Management ────────────────────────────────────────────
 # Sessions preserve conversation history between queries.
 session:
-  max_messages: 100           # Keep last N messages for context
+  max_messages: 1000          # Keep last N messages for context
   max_age: 24h                # Discard sessions older than this
   auto_save: true             # Persist sessions to disk
   save_path: "~/.local/share/agent/sessions"
