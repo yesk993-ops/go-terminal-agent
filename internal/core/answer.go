@@ -64,16 +64,17 @@ func ClassifyQuery(input string) AnswerFormat {
 		return AnswerFormatNormal
 	}
 
+	lower := strings.ToLower(input)
 	wordCount := countWords(input)
 	questionCount := strings.Count(input, "?")
 
 	// 1. Analytical queries (recommendations, comparisons, evaluations).
-	if isAnalyticalQuery(input) {
+	if isAnalyticalQuery(lower) {
 		return AnswerFormatAnalytical
 	}
 
 	// 2. Intent-driven format selection.
-	intent := ClassifyIntent(input)
+	intent := ClassifyIntent(lower)
 	switch intent {
 	case IntentCoding, IntentDebugging:
 		return AnswerFormatCode
@@ -98,12 +99,8 @@ func ClassifyQuery(input string) AnswerFormat {
 		if strings.Contains(lower, "in detail") || strings.Contains(lower, "thoroughly") || strings.Contains(lower, "comprehensive") {
 			return AnswerFormatDetailed
 		}
-		// Long explanation.
-		if wordCount > 25 {
-			return AnswerFormatDetailed
-		}
-		// Multi-part explanation questions deserve detail.
-		if questionCount > 1 {
+		// Long or multi-part explanation.
+		if wordCount > 25 || questionCount > 1 {
 			return AnswerFormatDetailed
 		}
 		// Short question — brief.
@@ -114,17 +111,8 @@ func ClassifyQuery(input string) AnswerFormat {
 	}
 
 	// 3. Structure-driven fallback.
-	if isExplanationQuery(input) {
-		if questionCount > 1 {
-			return AnswerFormatDetailed
-		}
-		if wordCount > 25 {
-			return AnswerFormatDetailed
-		}
-		if wordCount <= 5 {
-			return AnswerFormatBrief
-		}
-		return AnswerFormatNormal
+	if isExplanationQuery(lower) {
+		return explanationLength(questionCount, wordCount)
 	}
 
 	// 4. Multi-part question fallback.
@@ -144,12 +132,21 @@ func ClassifyQuery(input string) AnswerFormat {
 	return AnswerFormatNormal
 }
 
-// ClassifyIntent returns a high-level intent tag for the query.
-func ClassifyIntent(input string) QueryIntent {
-	input = strings.ToLower(strings.TrimSpace(input))
+func explanationLength(questionCount, wordCount int) AnswerFormat {
+	if wordCount > 6 || questionCount > 1 {
+		return AnswerFormatDetailed
+	}
+	if wordCount <= 5 {
+		return AnswerFormatBrief
+	}
+	return AnswerFormatNormal
+}
 
+// ClassifyIntent returns a high-level intent tag for the query.
+func ClassifyIntent(lower string) QueryIntent {
+	lower = strings.ToLower(strings.TrimSpace(lower))
 	// 1. Summarisation — explicit imperative, highest priority.
-	if strings.Contains(input, "summarize") || strings.Contains(input, "summary") || strings.Contains(input, "tl;dr") || strings.Contains(input, "in short") {
+	if strings.Contains(lower, "summarize") || strings.Contains(lower, "summary") || strings.Contains(lower, "tl;dr") || strings.Contains(lower, "in short") {
 		return IntentSummarization
 	}
 
@@ -158,7 +155,7 @@ func ClassifyIntent(input string) QueryIntent {
 		"difference between", "compare", "contrast", " vs ",
 	}
 	for _, ind := range comparisonCues {
-		if strings.Contains(input, ind) {
+		if strings.Contains(lower, ind) {
 			return IntentComparison
 		}
 	}
@@ -172,8 +169,8 @@ func ClassifyIntent(input string) QueryIntent {
 		"in detail", "thoroughly", "comprehensive",
 	}
 	for _, ind := range explanationCues {
-		if strings.Contains(input, ind) {
-			if strings.Contains(input, "debug") || strings.Contains(input, "error") || strings.Contains(input, "bug") || strings.Contains(input, "fix") {
+		if strings.Contains(lower, ind) {
+			if strings.Contains(lower, "debug") || strings.Contains(lower, "error") || strings.Contains(lower, "bug") || strings.Contains(lower, "fix") {
 				return IntentDebugging
 			}
 			return IntentExplanation
@@ -181,12 +178,12 @@ func ClassifyIntent(input string) QueryIntent {
 	}
 
 	// 4. Factual — who/when/where questions.
-	if strings.Contains(input, "who") || strings.Contains(input, "when") || strings.Contains(input, "where") || strings.Contains(input, "fact") || strings.Contains(input, "history") {
+	if strings.Contains(lower, "who") || strings.Contains(lower, "when") || strings.Contains(lower, "where") || strings.Contains(lower, "fact") || strings.Contains(lower, "history") {
 		return IntentFactual
 	}
 
 	// 5. Creative writing.
-	if strings.Contains(input, "write") && (strings.Contains(input, "story") || strings.Contains(input, "poem") || strings.Contains(input, "essay") || strings.Contains(input, "article")) {
+	if strings.Contains(lower, "write") && (strings.Contains(lower, "story") || strings.Contains(lower, "poem") || strings.Contains(lower, "essay") || strings.Contains(lower, "article")) {
 		return IntentCreative
 	}
 
@@ -203,8 +200,8 @@ func ClassifyIntent(input string) QueryIntent {
 		"rust", "golang", "python", "java", "javascript",
 	}
 	for _, ind := range codeIndicators {
-		if strings.Contains(input, ind) {
-			if strings.Contains(input, "debug") || strings.Contains(input, "error") || strings.Contains(input, "bug") || strings.Contains(input, "fix") {
+		if strings.Contains(lower, ind) {
+			if strings.Contains(lower, "debug") || strings.Contains(lower, "error") || strings.Contains(lower, "bug") || strings.Contains(lower, "fix") {
 				return IntentDebugging
 			}
 			return IntentCoding
@@ -232,20 +229,8 @@ func SystemPromptForFormat(format AnswerFormat) string {
 	}
 }
 
-// ─── Private helpers ─────────────────────────────────────────────────────────
 
-func isCodingQuery(input string) bool {
-	// This function is kept for historical compatibility but the core logic
-	// has been moved into ClassifyIntent for a more holistic analysis.
-	// The presence of code-related keywords is now one of several factors
-	// considered, rather than the sole determinant.
-	return ClassifyIntent(input) == IntentCoding || ClassifyIntent(input) == IntentDebugging
-}
-
-func isAnalyticalQuery(input string) bool {
-	lower := strings.ToLower(input)
-
-	// Multi-part questions with recommendations or structured analysis.
+func isAnalyticalQuery(lower string) bool {
 	if strings.Contains(lower, "compare") || strings.Contains(lower, "contrast") {
 		return true
 	}
@@ -256,12 +241,10 @@ func isAnalyticalQuery(input string) bool {
 		return true
 	}
 
-	// Bullet or numbered list requests.
 	if strings.Contains(lower, "list") && (strings.Contains(lower, "steps") || strings.Contains(lower, "reasons") || strings.Contains(lower, "points")) {
 		return true
 	}
 
-	// Asking for evaluation or recommendation.
 	if strings.Contains(lower, "which is better") || strings.Contains(lower, "recommend") || strings.Contains(lower, "best way") || strings.Contains(lower, "should i use") {
 		return true
 	}
@@ -269,12 +252,10 @@ func isAnalyticalQuery(input string) bool {
 	return false
 }
 
-func isExplanationQuery(input string) bool {
-	lower := strings.ToLower(input)
-
+func isExplanationQuery(lower string) bool {
 	indicators := []string{
 		"explain", "describe", "elaborate", "clarify",
-		"how does", "how do", "how can", "how is",
+		"how does",
 		"what is", "what are", "what does", "what's",
 		"why is", "why does", "why do", "why are",
 		"can you explain", "tell me about", "walk me through",

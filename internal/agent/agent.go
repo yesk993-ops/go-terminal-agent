@@ -189,7 +189,6 @@ func (a *DefaultAgent) runLoop(ctx context.Context, provider core.Provider, tool
 }
 
 func (a *DefaultAgent) finishResponse(ctx context.Context, outCh chan<- core.Token, cacheKey, content, query string) {
-	content = core.TrimToSentenceBoundary(content)
 	qc := core.CheckResponseQuality(content, query)
 	if !qc.Passed {
 		logger.L().Warn("response quality check failed",

@@ -5,6 +5,34 @@ import (
 	"unicode"
 )
 
+var stopWords = func() map[string]struct{} {
+	m := map[string]struct{}{
+		"the": {}, "a": {}, "an": {}, "is": {}, "are": {}, "was": {},
+		"were": {}, "be": {}, "been": {}, "being": {}, "have": {},
+		"has": {}, "had": {}, "do": {}, "does": {}, "did": {},
+		"will": {}, "would": {}, "could": {}, "should": {}, "may": {},
+		"might": {}, "can": {}, "shall": {}, "to": {}, "of": {},
+		"in": {}, "for": {}, "on": {}, "with": {}, "at": {},
+		"by": {}, "from": {}, "as": {}, "into": {}, "through": {},
+		"during": {}, "before": {}, "after": {}, "above": {}, "below": {},
+		"between": {}, "out": {}, "off": {}, "over": {}, "under": {},
+		"again": {}, "further": {}, "then": {}, "once": {}, "here": {},
+		"there": {}, "when": {}, "where": {}, "why": {}, "how": {},
+		"all": {}, "each": {}, "every": {}, "both": {}, "few": {},
+		"more": {}, "most": {}, "other": {}, "some": {}, "such": {},
+		"no": {}, "nor": {}, "not": {}, "only": {}, "own": {},
+		"same": {}, "so": {}, "than": {}, "too": {}, "very": {},
+		"just": {}, "because": {}, "about": {}, "up": {}, "down": {},
+		"and": {}, "but": {}, "or": {}, "if": {}, "while": {},
+		"this": {}, "that": {}, "these": {}, "those": {}, "it": {},
+		"its": {}, "i": {}, "me": {}, "my": {}, "we": {}, "our": {},
+		"you": {}, "your": {}, "he": {}, "she": {}, "they": {},
+		"them": {}, "their": {}, "what": {}, "which": {}, "who": {},
+		"whom": {}, "whose": {},
+	}
+	return m
+}()
+
 // QualityCheck holds the result of evaluating a generated response.
 type QualityCheck struct {
 	Passed         bool
@@ -29,11 +57,13 @@ func CheckResponseQuality(response, query string) QualityCheck {
 		}
 	}
 
+	lower := strings.ToLower(response)
+
 	// 1. Check for hallucination indicators (vague weasel words without substance).
 	weaselWords := []string{"it depends", "in many cases", "generally speaking", "some people say"}
 	weaselCount := 0
 	for _, w := range weaselWords {
-		if strings.Contains(strings.ToLower(response), w) {
+		if strings.Contains(lower, w) {
 			weaselCount++
 		}
 	}
@@ -43,22 +73,19 @@ func CheckResponseQuality(response, query string) QualityCheck {
 	}
 
 	// 2. Check for contradiction indicators.
-	if containsContradiction(response) {
-		issues = append(issues, "response may contain contradictory statements")
-		suggestions = append(suggestions, "review claims for logical consistency")
-	}
+	containsContradiction(lower, &issues, &suggestions)
 
 	// 3. Check response is relevant to the query (basic keyword overlap).
 	overlap := keywordOverlay(response, query)
-	if overlap < 10 && len(query) > 20 {
+	if overlap < 5 && len(query) > 20 {
 		issues = append(issues, "response has very low keyword overlap with the query")
 		suggestions = append(suggestions, "ensure the answer addresses the specific question asked")
 	}
 
 	// 4. Check for hedging without resolution.
-	if strings.Contains(strings.ToLower(response), "i'm not sure") &&
-		!strings.Contains(strings.ToLower(response), "but") &&
-		!strings.Contains(strings.ToLower(response), "however") {
+	if strings.Contains(lower, "i'm not sure") &&
+		!strings.Contains(lower, "but") &&
+		!strings.Contains(lower, "however") {
 		issues = append(issues, "response expresses uncertainty without offering actionable guidance")
 		suggestions = append(suggestions, "provide best-practice guidance even when uncertain")
 	}
@@ -96,8 +123,18 @@ func TrimToSentenceBoundary(s string) string {
 	}
 
 	lastGood := -1
+	lastPeriod := -1
 	for i, r := range s {
-		if r == '.' || r == '!' || r == '?' {
+		switch r {
+		case '.':
+			if i+1 >= len(s) || unicode.IsSpace(rune(s[i+1])) || s[i+1] == '"' || s[i+1] == '\'' {
+				if lastPeriod >= 0 && i-lastPeriod <= 4 {
+					continue
+				}
+				lastPeriod = i
+				lastGood = i
+			}
+		case '!', '?':
 			if i+1 >= len(s) || unicode.IsSpace(rune(s[i+1])) || s[i+1] == '"' || s[i+1] == '\'' {
 				lastGood = i
 			}
@@ -106,14 +143,12 @@ func TrimToSentenceBoundary(s string) string {
 	if lastGood > 0 {
 		return s[:lastGood+1]
 	}
-	// If no sentence boundary, return as-is rather than truncating mid-thought.
 	return s
 }
 
 // ─── Private helpers ─────────────────────────────────────────────────────────
 
-func containsContradiction(s string) bool {
-	lower := strings.ToLower(s)
+func containsContradiction(lower string, issues, suggestions *[]string) {
 	pairs := [][2]string{
 		{"always", "never"},
 		{"must", "should not"},
@@ -123,10 +158,11 @@ func containsContradiction(s string) bool {
 	}
 	for _, pair := range pairs {
 		if strings.Contains(lower, pair[0]) && strings.Contains(lower, pair[1]) {
-			return true
+			*issues = append(*issues, "response may contain contradictory statements")
+			*suggestions = append(*suggestions, "review claims for logical consistency")
+			return
 		}
 	}
-	return false
 }
 
 func keywordOverlay(a, b string) int {
@@ -152,35 +188,10 @@ func keywordOverlay(a, b string) int {
 }
 
 func extractKeywords(s string) []string {
-	stopWords := map[string]struct{}{
-		"the": {}, "a": {}, "an": {}, "is": {}, "are": {}, "was": {},
-		"were": {}, "be": {}, "been": {}, "being": {}, "have": {},
-		"has": {}, "had": {}, "do": {}, "does": {}, "did": {},
-		"will": {}, "would": {}, "could": {}, "should": {}, "may": {},
-		"might": {}, "can": {}, "shall": {}, "to": {}, "of": {},
-		"in": {}, "for": {}, "on": {}, "with": {}, "at": {},
-		"by": {}, "from": {}, "as": {}, "into": {}, "through": {},
-		"during": {}, "before": {}, "after": {}, "above": {}, "below": {},
-		"between": {}, "out": {}, "off": {}, "over": {}, "under": {},
-		"again": {}, "further": {}, "then": {}, "once": {}, "here": {},
-		"there": {}, "when": {}, "where": {}, "why": {}, "how": {},
-		"all": {}, "each": {}, "every": {}, "both": {}, "few": {},
-		"more": {}, "most": {}, "other": {}, "some": {}, "such": {},
-		"no": {}, "nor": {}, "not": {}, "only": {}, "own": {},
-		"same": {}, "so": {}, "than": {}, "too": {}, "very": {},
-		"just": {}, "because": {}, "about": {}, "up": {}, "down": {},
-		"and": {}, "but": {}, "or": {}, "if": {}, "while": {},
-		"this": {}, "that": {}, "these": {}, "those": {}, "it": {},
-		"its": {}, "i": {}, "me": {}, "my": {}, "we": {}, "our": {},
-		"you": {}, "your": {}, "he": {}, "she": {}, "they": {},
-		"them": {}, "their": {}, "what": {}, "which": {}, "who": {},
-		"whom": {}, "whose": {},
-	}
-
-	words := strings.Fields(strings.ToLower(s))
+	lower := strings.ToLower(s)
+	words := strings.Fields(lower)
 	keywords := make([]string, 0, len(words))
 	for _, w := range words {
-		// Strip punctuation.
 		w = strings.Trim(w, ".,!?;:\"'()[]{}<>")
 		if w == "" {
 			continue
