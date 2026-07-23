@@ -91,6 +91,14 @@ func (a *DefaultAgent) Run(ctx context.Context, req *core.Request) (<-chan core.
 func (a *DefaultAgent) runLoop(ctx context.Context, provider core.Provider, tools core.ToolRegistry, req *core.Request, outCh chan core.Token) {
 	currentReq := copyRequest(req)
 
+	var userQuery string
+	for i := len(currentReq.Messages) - 1; i >= 0; i-- {
+		if currentReq.Messages[i].Role == core.RoleUser {
+			userQuery = currentReq.Messages[i].Content
+			break
+		}
+	}
+
 	for turn := 0; turn <= maxToolCalls; turn++ {
 		cacheKey := a.cacheKey(provider, currentReq)
 		if a.cache != nil {
@@ -152,7 +160,7 @@ func (a *DefaultAgent) runLoop(ctx context.Context, provider core.Provider, tool
 					return
 				}
 			}
-			a.finishResponse(ctx, outCh, cacheKey, content)
+			a.finishResponse(ctx, outCh, cacheKey, content, userQuery)
 			return
 		}
 
@@ -175,12 +183,22 @@ func (a *DefaultAgent) runLoop(ctx context.Context, provider core.Provider, tool
 			}
 		}
 
-		a.finishResponse(ctx, outCh, cacheKey, content)
+		a.finishResponse(ctx, outCh, cacheKey, content, userQuery)
 		return
 	}
 }
 
-func (a *DefaultAgent) finishResponse(ctx context.Context, outCh chan<- core.Token, cacheKey, content string) {
+func (a *DefaultAgent) finishResponse(ctx context.Context, outCh chan<- core.Token, cacheKey, content, query string) {
+	content = core.TrimToSentenceBoundary(content)
+	qc := core.CheckResponseQuality(content, query)
+	if !qc.Passed {
+		logger.L().Warn("response quality check failed",
+			"score", qc.RelevanceScore,
+			"issues", qc.Issues,
+			"suggestions", qc.Suggestions,
+		)
+	}
+
 	if a.session != nil && content != "" {
 		a.session.Append(core.Message{
 			Role:    core.RoleAssistant,

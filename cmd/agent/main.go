@@ -217,10 +217,8 @@ func contentWidth() int {
 // a trimmed prompt to save tokens; anything longer keeps the full prompt so
 // answer quality is unaffected.
 func systemPromptFor(prompt string) string {
-	if len(prompt) <= 120 && !strings.ContainsAny(prompt, "\n") {
-		return core.SystemPromptShort
-	}
-	return core.SystemPrompt
+	format := core.ClassifyQuery(prompt)
+	return core.SystemPromptForFormat(format)
 }
 
 func runOnce(ag core.Agent, prompt string, w io.Writer, model string, maxTokens int, temperature float64) (retErr error) {

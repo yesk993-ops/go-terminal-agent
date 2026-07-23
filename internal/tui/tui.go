@@ -438,7 +438,9 @@ type streamStartedMsg struct {
 
 func (m *model) startStream(ctx context.Context, input string, streamID uint64) tea.Cmd {
 	return func() tea.Msg {
-		prompt := core.SystemPrompt
+		// Select the prompt based on query classification.
+		format := core.ClassifyQuery(input)
+		prompt := core.SystemPromptForFormat(format)
 		if m.showThinking {
 			prompt += "\n\nBefore answering, think step by step in a clear chain-of-thought. Show your reasoning inside <thinking>...</thinking> tags, then provide your final answer."
 		}
