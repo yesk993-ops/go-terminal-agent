@@ -173,7 +173,7 @@ func defaultModel(name string) string {
 	case "groq":
 		return "llama-3.3-70b-versatile"
 	case "nvidia":
-		return "meta/llama-3.3-70b-instruct"
+		return "meta/llama-3.1-8b-instruct"
 	case "openrouter":
 		return "openrouter/auto"
 	default:

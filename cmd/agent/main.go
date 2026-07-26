@@ -178,7 +178,7 @@ func setupProvider(providerName string, cfg *core.Config, modelFlag string) core
 	// Build a fallback chain only from providers that are actually configured.
 	// Trying empty credentials adds avoidable authentication round trips to the
 	// user's first response after a rate limit.
-	fallbackOrder := []string{"gemini", "openrouter"}
+	fallbackOrder := []string{"groq", "gemini", "nvidia", "openrouter"}
 	var fallbacks []core.Provider
 	for _, fb := range fallbackOrder {
 		if fb == providerName {

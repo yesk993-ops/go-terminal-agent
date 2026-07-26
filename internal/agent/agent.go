@@ -190,13 +190,7 @@ func (a *DefaultAgent) runLoop(ctx context.Context, provider core.Provider, tool
 
 func (a *DefaultAgent) finishResponse(ctx context.Context, outCh chan<- core.Token, cacheKey, content, query string) {
 	qc := core.CheckResponseQuality(content, query)
-	if !qc.Passed {
-		logger.L().Warn("response quality check failed",
-			"score", qc.RelevanceScore,
-			"issues", qc.Issues,
-			"suggestions", qc.Suggestions,
-		)
-	}
+	_ = qc // quality check runs silently — user only wants the answer
 
 	if a.session != nil && content != "" {
 		a.session.Append(core.Message{

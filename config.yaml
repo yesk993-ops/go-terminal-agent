@@ -35,6 +35,9 @@ providers:
   gemini:
     api_key: "${GEMINI_API_KEY}"
     model: gemini-2.5-flash
+  nvidia:
+    api_key: "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"
+    model: meta/llama-3.1-8b-instruct
   groq:
     api_key: "${GROQ_API_KEY}"
     model: llama-3.3-70b-versatile
@@ -78,6 +81,6 @@ cache:
 
 # ─── Logging ───────────────────────────────────────────────────────
 logging:
-  level: info                 # debug | info | warn | error
+  level: error                 # debug | info | warn | error
   format: text                # text | json
   output: stderr              # stderr | stdout | <filepath>

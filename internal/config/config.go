@@ -132,22 +132,38 @@ func loadProviderConfigs(v *viper.Viper) []core.ProviderConfig {
 	var configs []core.ProviderConfig
 
 	for name, envKey := range envMappings {
-		apiKey := os.Getenv(envKey)
-		// Gemini also accepts GOOGLE_API_KEY
-		if apiKey == "" && name == "gemini" {
-			apiKey = os.Getenv("GOOGLE_API_KEY")
-		}
-		// Fallback to .bashrc
-		if apiKey == "" {
-			apiKey = bashrcKeys[envKey]
-		}
-		if apiKey == "" && v.IsSet(fmt.Sprintf("providers.%s.api_key", name)) {
-			apiKey = v.GetString(fmt.Sprintf("providers.%s.api_key", name))
-		}
-
 		model := ""
 		if v.IsSet(fmt.Sprintf("providers.%s.model", name)) {
 			model = v.GetString(fmt.Sprintf("providers.%s.model", name))
+		}
+
+		// Check for hardcoded key in config first.
+		apiKey := ""
+		if v.IsSet(fmt.Sprintf("providers.%s.api_key", name)) {
+			raw := v.GetString(fmt.Sprintf("providers.%s.api_key", name))
+			if !strings.HasPrefix(raw, "${") && raw != "" {
+				apiKey = raw
+			}
+		}
+
+		// Then .bashrc (user's explicit override).
+		if apiKey == "" {
+			if k, ok := bashrcKeys[envKey]; ok && k != "" {
+				apiKey = k
+			}
+		}
+
+		// Then environment variable (may be stale from parent shell).
+		if apiKey == "" {
+			apiKey = os.Getenv(envKey)
+			if apiKey == "" && name == "gemini" {
+				apiKey = os.Getenv("GOOGLE_API_KEY")
+			}
+		}
+
+		// Last resort: unresolved ${ENV_VAR} references.
+		if apiKey == "" && v.IsSet(fmt.Sprintf("providers.%s.api_key", name)) {
+			apiKey = v.GetString(fmt.Sprintf("providers.%s.api_key", name))
 		}
 
 		configs = append(configs, core.ProviderConfig{
@@ -239,18 +255,14 @@ func ResolveAPIKey(providerName string, cfg *core.Config) string {
 		"openrouter": "OPENROUTER_API_KEY",
 	}
 
-	// 1. Check environment variable for this specific provider.
-	if k := os.Getenv(envKeys[providerName]); k != "" {
-		return k
-	}
-	// Gemini also accepts GOOGLE_API_KEY
-	if providerName == "gemini" {
-		if k := os.Getenv("GOOGLE_API_KEY"); k != "" {
-			return k
+	// 1. Config file wins over everything (hardcoded keys).
+	for _, pc := range cfg.Providers {
+		if pc.Name == providerName && pc.APIKey != "" && !strings.HasPrefix(pc.APIKey, "${") {
+			return pc.APIKey
 		}
 	}
 
-	// 2. Fallback to .bashrc
+	// 2. .bashrc — user's explicit config, overrides stale parent env.
 	bashrcKeys := loadBashrcEnv()
 	if k := bashrcKeys[envKeys[providerName]]; k != "" {
 		return k
@@ -261,7 +273,17 @@ func ResolveAPIKey(providerName string, cfg *core.Config) string {
 		}
 	}
 
-	// 3. Check config for this specific provider.
+	// 3. Environment variable (may be stale from parent shell).
+	if k := os.Getenv(envKeys[providerName]); k != "" {
+		return k
+	}
+	if providerName == "gemini" {
+		if k := os.Getenv("GOOGLE_API_KEY"); k != "" {
+			return k
+		}
+	}
+
+	// 4. Config file with ${ENV_VAR} references.
 	for _, pc := range cfg.Providers {
 		if pc.Name == providerName && pc.APIKey != "" {
 			return pc.APIKey

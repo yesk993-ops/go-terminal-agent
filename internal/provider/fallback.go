@@ -14,6 +14,7 @@ import (
 const (
 	transientRetryDelay = 250 * time.Millisecond
 	fallbackDelay       = 2 * time.Second
+	firstTokenTimeout   = 3 * time.Second // switch provider if no first token in 3s
 )
 
 type providerHealth struct {
@@ -60,25 +61,27 @@ func (f *fallbackProvider) Stream(ctx context.Context, req *core.Request) (<-cha
 			continue
 		}
 		if idx > 0 {
-			logger.L().Warn("falling back", "to", prov.Name())
+			// Silent fallback — user only wants the answer.
 		}
 
 		ch, err := f.tryWithRetry(ctx, prov, req)
 		if err == nil {
-			return f.withFallbackNotice(ctx, idx, prov, ch), nil
+			// Wait for first token with timeout — if nothing arrives in 3s, skip.
+			wrappedCh, ok := f.waitForFirstToken(ctx, ch, prov.Name())
+			if !ok {
+				continue
+			}
+			return f.withFallbackNotice(ctx, idx, prov, wrappedCh), nil
 		}
 		lastErr = err
 
 		if isDefinitiveUnavailable(err) {
 			f.markUnavailable(prov.Name(), cooldownFor(err))
-			logger.L().Warn("provider unavailable, trying next configured provider", "provider", prov.Name(), "error", err)
 			continue
 		}
 		if !isRetryableError(err) {
 			return nil, err
 		}
-
-		logger.L().Warn("temporary provider failure, trying next configured provider", "provider", prov.Name(), "error", err)
 
 		select {
 		case <-time.After(fallbackDelay):
@@ -97,29 +100,8 @@ func (f *fallbackProvider) withFallbackNotice(ctx context.Context, idx int, curr
 	if idx == 0 {
 		return in
 	}
-	out := make(chan core.Token, 64)
-	go func() {
-		defer close(out)
-		if !sendFallbackToken(ctx, out, core.Token{
-			Content: fmt.Sprintf("\n[Switching to %s after another provider was unavailable...]\n", current.Name()),
-		}) {
-			return
-		}
-		for {
-			select {
-			case tok, ok := <-in:
-				if !ok {
-					return
-				}
-				if !sendFallbackToken(ctx, out, tok) {
-					return
-				}
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-	return out
+	// Silent fallback — no notice to user, just stream the answer.
+	return in
 }
 
 func sendFallbackToken(ctx context.Context, out chan<- core.Token, tok core.Token) bool {
@@ -128,6 +110,43 @@ func sendFallbackToken(ctx context.Context, out chan<- core.Token, tok core.Toke
 		return true
 	case <-ctx.Done():
 		return false
+	}
+}
+
+// waitForFirstToken blocks until the first token arrives or the timeout expires.
+// Returns a new channel that replays the first token + rest of stream, or nil on timeout.
+func (f *fallbackProvider) waitForFirstToken(ctx context.Context, ch <-chan core.Token, name string) (<-chan core.Token, bool) {
+	timer := time.NewTimer(firstTokenTimeout)
+	defer timer.Stop()
+	select {
+	case tok, ok := <-ch:
+		if !ok || tok.Error != nil {
+			return nil, false
+		}
+		// Got first token — wrap channel to replay it + stream the rest.
+		out := make(chan core.Token, 64)
+		go func() {
+			defer close(out)
+			// Replay the first token we already read.
+			select {
+			case out <- tok:
+			case <-ctx.Done():
+				return
+			}
+			// Forward the rest.
+			for t := range ch {
+				select {
+				case out <- t:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+		return out, true
+	case <-timer.C:
+		return nil, false
+	case <-ctx.Done():
+		return nil, false
 	}
 }
 
@@ -190,7 +209,7 @@ func cooldownFor(err error) time.Duration {
 // provider delays the answer but cannot make progress.
 func isDefinitiveUnavailable(err error) bool {
 	if httpErr, ok := asHTTPError(err); ok {
-		return httpErr.StatusCode == 402 || httpErr.StatusCode == 429
+		return httpErr.StatusCode == 401 || httpErr.StatusCode == 402 || httpErr.StatusCode == 403 || httpErr.StatusCode == 429
 	}
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "insufficient_quota") ||
