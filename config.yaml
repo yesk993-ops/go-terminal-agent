@@ -11,7 +11,7 @@
 #   gemini     - Google's Gemini models (free tier available)
 #
 provider:
-  default: nvidia
+  default: groq
   max_tokens: 8192
   temperature: 0.7
 
@@ -32,19 +32,12 @@ providers:
   openai:
     api_key: "${OPENAI_API_KEY}"
     model: gpt-4o
-  anthropic:
-    api_key: "${ANTHROPIC_API_KEY}"
-    model: claude-sonnet-4-20250514
   gemini:
     api_key: "${GEMINI_API_KEY}"
-    model: gemini-2.5-pro
+    model: gemini-2.5-flash
   groq:
     api_key: "${GROQ_API_KEY}"
     model: llama-3.3-70b-versatile
-  nvidia:
-    api_key: "${NVIDIA_API_KEY}"
-    # meta/llama-3.1-8b-instruct (fast) or qwen/qwen3.5-122b-a10b (high quality)
-    model: meta/llama-3.1-8b-instruct
   openrouter:
     api_key: "${OPENROUTER_API_KEY}"
     # Free models on OpenRouter (no cost, no rate limits):

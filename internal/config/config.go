@@ -1,9 +1,11 @@
 package config
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/agent/ai-terminal/internal/core"
 	"github.com/spf13/viper"
@@ -19,7 +21,7 @@ func Load(path string) (*core.Config, error) {
 	v.SetConfigName("config")
 	v.SetConfigType("yaml")
 
-	v.SetDefault("provider.default", "openai")
+	v.SetDefault("provider.default", "groq")
 	v.SetDefault("provider.max_tokens", 4096)
 	v.SetDefault("provider.temperature", 0.7)
 
@@ -119,17 +121,26 @@ func Load(path string) (*core.Config, error) {
 func loadProviderConfigs(v *viper.Viper) []core.ProviderConfig {
 	envMappings := map[string]string{
 		"openai":     "OPENAI_API_KEY",
-		"anthropic":  "ANTHROPIC_API_KEY",
 		"gemini":     "GEMINI_API_KEY",
 		"groq":       "GROQ_API_KEY",
 		"nvidia":     "NVIDIA_API_KEY",
 		"openrouter": "OPENROUTER_API_KEY",
 	}
 
+	bashrcKeys := loadBashrcEnv()
+
 	var configs []core.ProviderConfig
 
 	for name, envKey := range envMappings {
 		apiKey := os.Getenv(envKey)
+		// Gemini also accepts GOOGLE_API_KEY
+		if apiKey == "" && name == "gemini" {
+			apiKey = os.Getenv("GOOGLE_API_KEY")
+		}
+		// Fallback to .bashrc
+		if apiKey == "" {
+			apiKey = bashrcKeys[envKey]
+		}
 		if apiKey == "" && v.IsSet(fmt.Sprintf("providers.%s.api_key", name)) {
 			apiKey = v.GetString(fmt.Sprintf("providers.%s.api_key", name))
 		}
@@ -148,6 +159,37 @@ func loadProviderConfigs(v *viper.Viper) []core.ProviderConfig {
 	}
 
 	return configs
+}
+
+func loadBashrcEnv() map[string]string {
+	keys := make(map[string]string)
+	home := os.Getenv("HOME")
+	if home == "" {
+		return keys
+	}
+	for _, name := range []string{".bashrc", ".zshrc", ".profile", ".bash_profile"} {
+		f, err := os.Open(filepath.Join(home, name))
+		if err != nil {
+			continue
+		}
+		scanner := bufio.NewScanner(f)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if !strings.HasPrefix(line, "export ") {
+				continue
+			}
+			line = strings.TrimPrefix(line, "export ")
+			parts := strings.SplitN(line, "=", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			key := parts[0]
+			val := strings.Trim(parts[1], "\"' ")
+			keys[key] = val
+		}
+		f.Close()
+	}
+	return keys
 }
 
 func defaultSessionPath() string {
@@ -191,7 +233,6 @@ func Save(path string, cfg *core.Config) error {
 func ResolveAPIKey(providerName string, cfg *core.Config) string {
 	envKeys := map[string]string{
 		"openai":     "OPENAI_API_KEY",
-		"anthropic":  "ANTHROPIC_API_KEY",
 		"gemini":     "GEMINI_API_KEY",
 		"groq":       "GROQ_API_KEY",
 		"nvidia":     "NVIDIA_API_KEY",
@@ -202,8 +243,25 @@ func ResolveAPIKey(providerName string, cfg *core.Config) string {
 	if k := os.Getenv(envKeys[providerName]); k != "" {
 		return k
 	}
+	// Gemini also accepts GOOGLE_API_KEY
+	if providerName == "gemini" {
+		if k := os.Getenv("GOOGLE_API_KEY"); k != "" {
+			return k
+		}
+	}
 
-	// 2. Check config for this specific provider.
+	// 2. Fallback to .bashrc
+	bashrcKeys := loadBashrcEnv()
+	if k := bashrcKeys[envKeys[providerName]]; k != "" {
+		return k
+	}
+	if providerName == "gemini" {
+		if k := bashrcKeys["GOOGLE_API_KEY"]; k != "" {
+			return k
+		}
+	}
+
+	// 3. Check config for this specific provider.
 	for _, pc := range cfg.Providers {
 		if pc.Name == providerName && pc.APIKey != "" {
 			return pc.APIKey

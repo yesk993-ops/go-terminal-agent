@@ -151,8 +151,6 @@ func defaultBaseURL(name string) string {
 	switch name {
 	case "openai":
 		return "https://api.openai.com/v1"
-	case "anthropic":
-		return "https://api.anthropic.com/v1"
 	case "gemini":
 		return "https://generativelanguage.googleapis.com/v1beta"
 	case "groq":
@@ -170,14 +168,12 @@ func defaultModel(name string) string {
 	switch name {
 	case "openai":
 		return "gpt-4o"
-	case "anthropic":
-		return "claude-sonnet-4-20250514"
 	case "gemini":
-		return "gemini-2.5-pro"
+		return "gemini-2.5-flash"
 	case "groq":
 		return "llama-3.3-70b-versatile"
 	case "nvidia":
-		return "meta/llama-3.1-8b-instruct"
+		return "meta/llama-3.3-70b-instruct"
 	case "openrouter":
 		return "openrouter/auto"
 	default:
@@ -404,17 +400,18 @@ func streamGeminiSSE(ctx context.Context, resp *http.Response) (<-chan core.Toke
 				continue
 			}
 
-			candidate := chunk.Candidates[0]
-			if candidate.FinishReason != "" {
-				sendStreamToken(ctx, tokenCh, core.Token{Done: true})
+candidate := chunk.Candidates[0]
+
+		for _, part := range candidate.Content.Parts {
+			if part.Text != "" && !sendStreamToken(ctx, tokenCh, core.Token{Content: part.Text}) {
 				return
 			}
+		}
 
-			for _, part := range candidate.Content.Parts {
-				if part.Text != "" && !sendStreamToken(ctx, tokenCh, core.Token{Content: part.Text}) {
-					return
-				}
-			}
+		if candidate.FinishReason != "" {
+			sendStreamToken(ctx, tokenCh, core.Token{Done: true})
+			return
+		}
 		}
 
 		if err := scanner.Err(); err != nil && ctx.Err() == nil {
@@ -426,72 +423,7 @@ func streamGeminiSSE(ctx context.Context, resp *http.Response) (<-chan core.Toke
 	return tokenCh, nil
 }
 
-func streamAnthropicSSE(ctx context.Context, resp *http.Response) (<-chan core.Token, error) {
-	tokenCh := make(chan core.Token, 64)
 
-	go func() {
-		defer close(tokenCh)
-		defer resp.Body.Close()
-		stopWatching := watchStreamCancellation(ctx, resp.Body)
-		defer stopWatching()
-
-		scanner := bufio.NewScanner(resp.Body)
-		scanner.Buffer(make([]byte, 0, 64*1024), 256*1024)
-
-		for scanner.Scan() {
-			line := scanner.Text()
-
-			if err := ctx.Err(); err != nil {
-				sendStreamToken(ctx, tokenCh, core.Token{Error: core.ErrContextCancelled, Done: true})
-				return
-			}
-
-			if !strings.HasPrefix(line, "data: ") {
-				continue
-			}
-
-			data := strings.TrimPrefix(line, "data: ")
-			var event struct {
-				Type  string `json:"type"`
-				Delta struct {
-					Text string `json:"text"`
-				} `json:"delta"`
-				ContentBlock struct {
-					Text string `json:"text"`
-				} `json:"content_block"`
-			}
-
-			if err := json.Unmarshal([]byte(data), &event); err != nil {
-				continue
-			}
-
-			switch event.Type {
-			case "content_block_delta":
-				if event.Delta.Text != "" && !sendStreamToken(ctx, tokenCh, core.Token{Content: event.Delta.Text}) {
-					return
-				}
-			case "content_block_start":
-				if event.ContentBlock.Text != "" && !sendStreamToken(ctx, tokenCh, core.Token{Content: event.ContentBlock.Text}) {
-					return
-				}
-			case "message_stop":
-				sendStreamToken(ctx, tokenCh, core.Token{Done: true})
-				return
-			}
-		}
-
-		if err := scanner.Err(); err != nil && ctx.Err() == nil {
-			logger.L().Debug("Anthropic SSE error", "error", err)
-			sendStreamToken(ctx, tokenCh, core.Token{Error: err, Done: true})
-			return
-		}
-		if ctx.Err() == nil {
-			sendStreamToken(ctx, tokenCh, core.Token{Done: true})
-		}
-	}()
-
-	return tokenCh, nil
-}
 
 type chatMessage struct {
 	Role       string `json:"role"`

@@ -11,7 +11,10 @@ import (
 	"github.com/agent/ai-terminal/internal/logger"
 )
 
-const transientRetryDelay = 250 * time.Millisecond
+const (
+	transientRetryDelay = 250 * time.Millisecond
+	fallbackDelay       = 2 * time.Second
+)
 
 type providerHealth struct {
 	unavailableUntil time.Time
@@ -76,6 +79,12 @@ func (f *fallbackProvider) Stream(ctx context.Context, req *core.Request) (<-cha
 		}
 
 		logger.L().Warn("temporary provider failure, trying next configured provider", "provider", prov.Name(), "error", err)
+
+		select {
+		case <-time.After(fallbackDelay):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
 
 	if lastErr != nil {
