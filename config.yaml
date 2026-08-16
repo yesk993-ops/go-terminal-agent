@@ -17,12 +17,23 @@ provider:
 
 # ─── API Keys ────────────────────────────────────────────────────────
 # Set via environment variables (recommended):
-#   export NVIDIA_API_KEY="nvapi-..."    # Free: nvapi key from build.nvidia.com
-#   export GROQ_API_KEY="gsk_..."        # Free: console.groq.com
-#   export OPENAI_API_KEY="sk-..."       # Paid: platform.openai.com
-#   export ANTHROPIC_API_KEY="sk-ant-..."# Paid: console.anthropic.com
-#   export GEMINI_API_KEY="AIza..."      # Free: aistudio.google.com
-#   export OPENROUTER_API_KEY="sk-or-..."# Pay-as-you-go: openrouter.ai/keys
+#
+#   Linux/macOS:
+#     export NVIDIA_API_KEY="nvapi-..."    # Free: nvapi key from build.nvidia.com
+#     export GROQ_API_KEY="gsk_..."        # Free: console.groq.com
+#     export OPENAI_API_KEY="sk-..."       # Paid: platform.openai.com
+#     export ANTHROPIC_API_KEY="sk-ant-..."# Paid: console.anthropic.com
+#     export GEMINI_API_KEY="AIza..."      # Free: aistudio.google.com
+#     export OPENROUTER_API_KEY="sk-or-..."# Pay-as-you-go: openrouter.ai/keys
+#
+#   Windows PowerShell:
+#     $env:NVIDIA_API_KEY = "nvapi-..."
+#     # Persist for all sessions:
+#     [System.Environment]::SetEnvironmentVariable("NVIDIA_API_KEY","nvapi-...","User")
+#
+#   Windows (any shell): create %APPDATA%\agent\agent.env with lines like:
+#     NVIDIA_API_KEY=nvapi-...
+#     GROQ_API_KEY=gsk_...
 #
 # Keys use ${ENV_VAR} syntax to read from environment.
 # To hardcode a key (not recommended for shared machines):
@@ -66,11 +77,16 @@ ui:
 
 # ─── Session Management ────────────────────────────────────────────
 # Sessions preserve conversation history between queries.
+# Default path is platform-specific when omitted:
+#   Linux/macOS: ~/.local/share/agent
+#   Windows:     %LOCALAPPDATA%\agent\sessions
 session:
   max_messages: 1000          # Keep last N messages for context
   max_age: 24h                # Discard sessions older than this
   auto_save: true             # Persist sessions to disk
-  save_path: "~/.local/share/agent/sessions"
+  # save_path: "~/.local/share/agent/sessions"   # Unix
+  # save_path: "~/AppData/Local/agent/sessions"  # Windows (or leave unset)
+
 
 # ─── Response Caching ──────────────────────────────────────────────
 # Cache identical requests to reduce API calls.

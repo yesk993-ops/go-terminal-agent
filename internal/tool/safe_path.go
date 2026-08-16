@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -19,7 +20,7 @@ func init() {
 		allowedPaths = append(allowedPaths, home)
 	}
 
-	// Allow /tmp for temporary file operations.
+	// Allow the system temp directory ( /tmp on Unix, %TEMP% on Windows ).
 	allowedPaths = append(allowedPaths, os.TempDir())
 }
 
@@ -66,10 +67,17 @@ func resolveSafePath(filePath string) (string, error) {
 }
 
 // isPathAllowed returns true if the resolved path is within any allowed
-// directory tree.
+// directory tree. Comparison is case-insensitive on Windows.
 func isPathAllowed(resolved string) bool {
+	resolved = filepath.Clean(resolved)
+	if runtime.GOOS == "windows" {
+		resolved = strings.ToLower(resolved)
+	}
 	for _, allowed := range allowedPaths {
 		allowed = filepath.Clean(allowed)
+		if runtime.GOOS == "windows" {
+			allowed = strings.ToLower(allowed)
+		}
 		if strings.HasPrefix(resolved, allowed+string(filepath.Separator)) ||
 			resolved == allowed {
 			return true

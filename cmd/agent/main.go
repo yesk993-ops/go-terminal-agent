@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/signal"
 	"strings"
-	"syscall"
 
 	"github.com/agent/ai-terminal/internal/agent"
 	"github.com/agent/ai-terminal/internal/cache"
@@ -127,8 +126,9 @@ func main() {
 	})
 	pModel := tea.NewProgram(m, tea.WithAltScreen())
 
+	// os.Interrupt is portable across Windows (Ctrl+C) and Unix (SIGINT).
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigCh, os.Interrupt)
 	go func() {
 		<-sigCh
 		pModel.Quit()

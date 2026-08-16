@@ -6,7 +6,7 @@ APP_NAME = agent
 VERSION = $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 BUILD_FLAGS = -ldflags="-s -w -X main.version=$(VERSION)"
 
-.PHONY: all build clean test lint run install reinstall setup help
+.PHONY: all build clean test lint run install reinstall setup help dist-windows build-windows build-windows-arm64 build-linux build-darwin build-all deps test-short run-dev
 
 all: clean test build
 
@@ -21,8 +21,14 @@ build-darwin:
 
 build-windows:
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $(GO) build $(BUILD_FLAGS) -o $(APP_NAME)-windows-amd64.exe ./cmd/agent
+	@echo "Windows binary: $(APP_NAME)-windows-amd64.exe"
+	@echo "On Windows 11 run:  powershell -ExecutionPolicy Bypass -File .\\scripts\\install.ps1 -SkipBuild"
+	@echo "  (place the .exe next to the script, or copy to %LOCALAPPDATA%\\agent\\bin\\ai-agent.exe)"
 
-build-all: build-linux build-darwin build-windows
+build-windows-arm64:
+	CGO_ENABLED=0 GOOS=windows GOARCH=arm64 $(GO) build $(BUILD_FLAGS) -o $(APP_NAME)-windows-arm64.exe ./cmd/agent
+
+build-all: build-linux build-darwin build-windows build-windows-arm64
 
 test:
 	$(GO) test ./... -v -count=1 -race
@@ -77,9 +83,20 @@ setup:
 	@echo "  go build ./...           Real Go compiler (passthrough)"
 	@echo "  go                       Launch interactive TUI"
 	@echo "  go -h                    Show all options"
+	@echo ""
+	@echo "Windows 11: use  powershell -File .\\scripts\\install.ps1"
+	@echo "  or: make build-windows   then copy the .exe to the target PC"
+
+# Cross-compile a Windows binary from Linux/macOS and package install scripts.
+dist-windows: build-windows
+	@mkdir -p dist/windows
+	@cp $(APP_NAME)-windows-amd64.exe dist/windows/ai-agent.exe
+	@cp scripts/install.ps1 scripts/setup-windows.ps1 config.yaml dist/windows/
+	@echo "Packaged dist/windows/ — copy that folder to a Windows 11 machine and run install.ps1 -SkipBuild"
 
 clean:
-	rm -f $(APP_NAME) $(APP_NAME)-linux-amd64 $(APP_NAME)-darwin-amd64 $(APP_NAME)-windows-amd64.exe
+	rm -f $(APP_NAME) $(APP_NAME)-linux-amd64 $(APP_NAME)-darwin-amd64 $(APP_NAME)-windows-amd64.exe $(APP_NAME)-windows-arm64.exe
+	rm -rf dist/
 
 deps:
 	$(GO) mod tidy
@@ -87,18 +104,27 @@ deps:
 
 help:
 	@echo "Usage:"
-	@echo "  make build       - Build for current platform"
-	@echo "  make build-all   - Cross-compile for Linux, macOS, Windows"
-	@echo "  make test        - Run all tests with race detection"
-	@echo "  make lint        - Run go vet"
-	@echo "  make run         - Build and run"
-	@echo "  make install     - Install system-wide as \`go\` command (requires sudo)"
-	@echo "  make setup       - Install to ~/.local/bin with alias instructions"
-	@echo "  make clean       - Remove build artifacts"
-	@echo "  make deps        - Tidy and verify dependencies"
+	@echo "  make build          - Build for current platform"
+	@echo "  make build-all      - Cross-compile for Linux, macOS, Windows (amd64+arm64)"
+	@echo "  make build-windows  - Cross-compile Windows amd64 .exe"
+	@echo "  make dist-windows   - Package .exe + install.ps1 into dist/windows/"
+	@echo "  make test           - Run all tests with race detection"
+	@echo "  make lint           - Run go vet"
+	@echo "  make run            - Build and run"
+	@echo "  make install        - Install system-wide as \`go\` command (requires sudo, Unix)"
+	@echo "  make setup          - Install to ~/.local/bin (Unix)"
+	@echo "  make clean          - Remove build artifacts"
+	@echo "  make deps           - Tidy and verify dependencies"
 	@echo ""
-	@echo "Quick start:"
+	@echo "Quick start (Linux/macOS):"
 	@echo "  1. make setup"
 	@echo "  2. Add the alias to your shell config (shown above)"
 	@echo "  3. export GROQ_API_KEY=\"gsk_...\""
 	@echo "  4. go what is docker"
+	@echo ""
+	@echo "Quick start (Windows 11):"
+	@echo "  1. Install Go 1.22+ from https://go.dev/dl/"
+	@echo "  2. powershell -ExecutionPolicy Bypass -File .\\scripts\\install.ps1"
+	@echo "  3. Set NVIDIA_API_KEY / GROQ_API_KEY (User env var or config.yaml)"
+	@echo "  4. ai-agent   or   go-agent \"what is docker\""
+

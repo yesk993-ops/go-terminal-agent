@@ -16,15 +16,61 @@ A production-ready terminal AI assistant with multi-provider LLM support, tool e
 | **ChatGPT-style TUI** | Streaming responses, chat history, colored output, interactive commands |
 | **CLI mode** | One-shot prompts from command line for scripting/automation |
 | **Tool execution** | 8 built-in tools: read/write/edit files, grep, glob, bash, web search/fetch |
-| **Session persistence** | Chat history auto-saves to `~/.local/share/agent/sessions/` across restarts |
+| **Session persistence** | Chat history auto-saves across restarts (platform-specific data dir) |
 | **Response caching** | LRU cache with TTL (default: 5 min, 500 entries) for repeated queries |
 | **Fallback provider chain** | Auto-retry with backoff, then failover to next provider on rate limits |
-| **`go` wrapper** | System-wide alias: `go "prompt"` runs AI, `go build` passes to real Go compiler |
-| **Cross-platform** | Linux, macOS, Windows (amd64) |
+| **`go` wrapper** | Unix: system-wide alias `go "prompt"` runs AI, `go build` → real Go |
+| **Cross-platform** | Linux, macOS, **Windows 11** (amd64 + arm64) |
 
 ---
 
 ## Quick Install
+
+### Windows 11 (PowerShell)
+
+**Prerequisites:** [Go 1.22+](https://go.dev/dl/) and [Git](https://git-scm.com/download/win) installed.
+
+```powershell
+# From a cloned repo:
+git clone https://github.com/yesk993-ops/go-terminal-agent.git
+cd go-terminal-agent
+powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
+
+# Or one-liner (clones + builds + installs):
+irm https://raw.githubusercontent.com/yesk993-ops/go-terminal-agent/master/scripts/setup-windows.ps1 | iex
+```
+
+Then open a **new** PowerShell / Windows Terminal window and run:
+
+```powershell
+ai-agent                        # interactive TUI
+ai-agent "what is docker"       # one-shot prompt
+go-agent "explain goroutines"   # friendly alias
+```
+
+| Windows path | Purpose |
+|--------------|---------|
+| `%LOCALAPPDATA%\agent\bin\ai-agent.exe` | Binary |
+| `%LOCALAPPDATA%\agent\bin\go-agent.cmd` | Launcher alias |
+| `%APPDATA%\agent\config.yaml` | Config |
+| `%APPDATA%\agent\agent.env` | Optional `KEY=value` API keys file |
+| `%LOCALAPPDATA%\agent\sessions\` | Saved chat sessions |
+
+Set an API key (pick one):
+
+```powershell
+# Current session only:
+$env:NVIDIA_API_KEY = "nvapi-..."
+$env:GROQ_API_KEY   = "gsk_..."
+
+# Persist for all future sessions:
+[System.Environment]::SetEnvironmentVariable("NVIDIA_API_KEY", "nvapi-...", "User")
+
+# Or create %APPDATA%\agent\agent.env:
+#   NVIDIA_API_KEY=nvapi-...
+```
+
+> **Note:** On Windows the assistant is `ai-agent` / `go-agent` so it never shadows the real `go` compiler.
 
 ### One-Command Install (Linux/macOS, no sudo)
 
@@ -43,15 +89,39 @@ export PATH="$HOME/.local/bin:$PATH"
 ```bash
 git clone https://github.com/yesk993-ops/go-terminal-agent.git
 cd go-terminal-agent
+
+# Linux / macOS
 make setup          # Builds and installs to ~/.local/bin with config
-# or: make build     # Just builds binary as ./ai-agent
+# or: make build     # Just builds binary as ./agent
+
+# Cross-compile a Windows .exe from Linux/macOS
+make build-windows          # → agent-windows-amd64.exe
+make dist-windows           # packages .exe + install.ps1 into dist/windows/
 ```
+
+### Windows (pre-built binary, no Go on the PC)
+
+1. On any machine with Go: `make dist-windows`
+2. Copy the `dist/windows/` folder to the Windows 11 PC
+3. In that folder run:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\install.ps1 -SkipBuild
+   ```
 
 ---
 
 ## Configuration
 
+### Config locations
+
+| OS | Config file | Sessions |
+|----|-------------|----------|
+| **Windows** | `%APPDATA%\agent\config.yaml` | `%LOCALAPPDATA%\agent\sessions\` |
+| **Linux/macOS** | `~/.config/agent/config.yaml` | `~/.local/share/agent/` |
+
 ### API Keys (choose at least one)
+
+**Linux/macOS:**
 
 ```bash
 export NVIDIA_API_KEY="nvapi-..."    # Free, reliable (default)
@@ -62,9 +132,17 @@ export GEMINI_API_KEY="AIza..."      # Free tier
 export OPENROUTER_API_KEY="sk-or-..." # Paid (access to all models)
 ```
 
-Or edit `~/.config/agent/config.yaml` directly.
+**Windows PowerShell:**
 
-### Config File: `~/.config/agent/config.yaml`
+```powershell
+$env:NVIDIA_API_KEY = "nvapi-..."
+# Persist:
+[System.Environment]::SetEnvironmentVariable("NVIDIA_API_KEY", "nvapi-...", "User")
+```
+
+Or edit the config file, or create `agent.env` next to it (`KEY=value` lines).
+
+### Config File example
 
 ```yaml
 provider:
@@ -76,9 +154,6 @@ providers:
   openai:
     api_key: "${OPENAI_API_KEY}"
     model: "gpt-4o"
-  anthropic:
-    api_key: "${ANTHROPIC_API_KEY}"
-    model: "claude-sonnet-4-20250514"
   gemini:
     api_key: "${GEMINI_API_KEY}"
     model: "gemini-2.5-pro"
@@ -101,7 +176,7 @@ session:
   max_messages: 100
   max_age: 24h
   auto_save: true
-  save_path: "~/.local/share/agent/sessions"
+  # save_path is auto-detected per OS when omitted
 
 cache:
   enabled: true
@@ -121,7 +196,13 @@ logging:
 ### Interactive TUI
 
 ```bash
-go                    # Launch TUI
+# Linux/macOS (after setup with go-wrapper)
+go
+
+# Windows 11
+ai-agent
+# or
+go-agent
 ```
 
 **TUI Commands:**
@@ -139,19 +220,28 @@ go                    # Launch TUI
 ### CLI Mode (One-shot)
 
 ```bash
+# Linux/macOS
 go "explain goroutines in Go"
-go -p groq -m llama-3.3-70b-versatile "write a http server in go"
+go -provider groq -model llama-3.3-70b-versatile "write a http server in go"
 go --list-providers
+
+# Windows
+ai-agent "explain goroutines in Go"
+ai-agent -provider groq "write a http server in go"
+ai-agent --list-providers
 ```
 
-### Real Go Compiler Passthrough
+### Real Go Compiler Passthrough (Linux/macOS only)
+
+On Unix the `go` wrapper forwards real Go subcommands:
 
 ```bash
 go build ./...
 go test ./...
 go mod tidy
-# Any go subcommand passes through to real Go
 ```
+
+On Windows use the real `go` from [go.dev](https://go.dev/dl/) for builds, and `ai-agent` / `go-agent` for the AI assistant.
 
 ---
 
@@ -179,11 +269,11 @@ Override per-request: `go -p openai -m gpt-4o "prompt"`
 | `edit` | Find-and-replace edit in file |
 | `grep` | Regex search file contents (with file filter) |
 | `glob` | Find files by glob pattern |
-| `bash` | Execute shell commands (destructive commands blocked) |
+| `bash` | Execute shell commands (`sh` on Unix, `cmd.exe` / PowerShell on Windows; destructive commands blocked) |
 | `web_search` | DuckDuckGo instant answer API search |
 | `web_fetch` | Fetch and extract web page content |
 
-> **Note:** Tools are only available in CLI mode (`go "prompt"`), not in the interactive TUI.
+> **Note:** Tools are only available in CLI mode (`ai-agent "prompt"` / `go "prompt"`), not in the interactive TUI.
 
 ---
 
@@ -204,10 +294,12 @@ go-terminal-agent/
 │   │   ├── session.go         # Session/Store interfaces
 │   │   └── tool.go            # Tool/Registry interfaces
 │   ├── logger/logger.go       # Structured slog logger
-│   ├── plugin/plugin.go       # Go plugin system (.so files)
-│   ├── provider/              # 6 LLM providers + fallback chain
+│   ├── plugin/                # Plugin loader (.so on Unix; no-op on Windows)
+│   │   ├── plugin.go
+│   │   ├── plugin_unix.go
+│   │   └── plugin_windows.go
+│   ├── provider/              # LLM providers + fallback chain
 │   │   ├── provider.go        # Registry, base provider, SSE streaming
-│   │   ├── anthropic.go       # Anthropic Claude
 │   │   ├── fallback.go        # Retry + fallback chain
 │   │   ├── gemini.go          # Google Gemini
 │   │   ├── groq.go            # Groq (OpenAI-compatible)
@@ -216,15 +308,20 @@ go-terminal-agent/
 │   │   └── openrouter.go      # OpenRouter
 │   ├── session/session.go     # JSON file persistence with auto-save
 │   ├── tool/                  # 8 tool implementations
-│   │   ├── bash.go            # Shell exec (destructive blocked)
+│   │   ├── bash.go            # Shell exec (sh / cmd.exe, destructive blocked)
 │   │   ├── edit.go            # File edit tool
 │   │   ├── glob.go            # Glob pattern search
 │   │   ├── grep.go            # Regex content search
 │   │   ├── read.go            # File read tool
 │   │   ├── registry.go        # Tool registry + JSON schema
+│   │   ├── safe_path.go       # Cross-platform path sandbox
 │   │   ├── webfetch.go        # HTTP fetch tool
 │   │   ├── websearch.go       # DuckDuckGo search tool
 │   │   └── write.go           # File write tool
+│   ├── config/
+│   │   ├── config.go          # Viper config loader
+│   │   ├── paths.go           # OS-specific config/session paths
+│   │   └── envfile.go         # bashrc / PowerShell / agent.env key loading
 │   └── tui/                   # Bubble Tea TUI
 │       ├── tui.go             # Main TUI model & commands
 │       ├── markdown.go        # Message styling
@@ -232,9 +329,11 @@ go-terminal-agent/
 │       └── styles.go          # Lip Gloss styles
 ├── config.yaml                # Example config
 ├── scripts/
-│   ├── go-wrapper             # Smart `go` command wrapper
-│   ├── install.sh             # System-wide install (sudo)
-│   └── setup-global.sh        # One-command install (no sudo)
+│   ├── go-wrapper             # Smart `go` command wrapper (Unix)
+│   ├── install.sh             # System-wide install (Unix, sudo)
+│   ├── setup-global.sh        # One-command install (Unix, no sudo)
+│   ├── install.ps1            # Windows 11 installer
+│   └── setup-windows.ps1      # Windows 11 one-command setup
 └── Makefile
 ```
 
@@ -286,12 +385,15 @@ go test ./internal/cache/... -v      # Run specific package tests
 
 ## Installation Options
 
-| Method | Command | Location | Requires sudo |
-|--------|---------|----------|---------------|
-| One-command | `curl ... setup-global.sh \| bash` | `~/.local/bin` | No |
-| Make target | `make setup` | `~/.local/bin` | No |
-| System-wide | `make install` | `/usr/local/bin` | Yes |
-| Manual | `go build -o ai-agent ./cmd/agent` | `./ai-agent` | No |
+| Platform | Method | Command | Location |
+|----------|--------|---------|----------|
+| **Windows 11** | PowerShell install | `.\scripts\install.ps1` | `%LOCALAPPDATA%\agent\bin` |
+| **Windows 11** | One-liner | `irm .../setup-windows.ps1 \| iex` | `%LOCALAPPDATA%\agent\bin` |
+| **Windows 11** | Pre-built | `make dist-windows` then `install.ps1 -SkipBuild` | `%LOCALAPPDATA%\agent\bin` |
+| Linux/macOS | One-command | `curl ... setup-global.sh \| bash` | `~/.local/bin` |
+| Linux/macOS | Make target | `make setup` | `~/.local/bin` |
+| Linux/macOS | System-wide | `make install` | `/usr/local/bin` |
+| Any | Manual | `go build -o ai-agent(.exe) ./cmd/agent` | `./` |
 
 ---
 
@@ -299,11 +401,14 @@ go test ./internal/cache/... -v      # Run specific package tests
 
 | Issue | Solution |
 |-------|----------|
-| "command not found: go" | Add `export PATH="$HOME/.local/bin:$PATH"` to shell config, restart shell |
-| "no API key configured" | Export one of the API key env vars or edit `~/.config/agent/config.yaml` |
-| "provider not found" | Run `go --list-providers` to see available; check config.yaml spelling |
-| TUI rendering issues | Ensure terminal supports true color; try `export TERM=xterm-256color` |
-| Go wrapper conflicts | Use `go build` (passthrough) vs `go "prompt"` (AI); wrapper detects subcommands |
+| `"ai-agent" not recognized` (Windows) | Open a **new** terminal after install so PATH updates apply; or run `%LOCALAPPDATA%\agent\bin\ai-agent.exe` directly |
+| "command not found: go" (Unix wrapper) | Add `export PATH="$HOME/.local/bin:$PATH"` to shell config, restart shell |
+| "no API key configured" | Set an env var, edit config.yaml, or create `agent.env` (see Configuration) |
+| "provider not found" | Run `ai-agent --list-providers` (or `go --list-providers`); check config.yaml spelling |
+| TUI rendering issues | Use Windows Terminal (not legacy `conhost`); enable UTF-8 / true color |
+| PowerShell execution policy | Run with `-ExecutionPolicy Bypass -File .\scripts\install.ps1` |
+| Go wrapper conflicts (Unix) | Use `go build` (passthrough) vs `go "prompt"` (AI); wrapper detects subcommands |
+| Want real `go` on Windows | Install from https://go.dev/dl/ — the agent uses `ai-agent`/`go-agent` and does not shadow `go` |
 
 ---
 

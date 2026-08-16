@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/agent/ai-terminal/internal/core"
@@ -21,7 +22,9 @@ func TestBashToolEcho(t *testing.T) {
 	if result.Status == core.StatusError {
 		t.Fatalf("unexpected error: %s", result.Error)
 	}
-	if result.Output != "hello\n" && result.Output != "hello" {
+	// Trim space to accept "hello", "hello\n", and Windows "hello\r\n".
+	got := strings.TrimSpace(result.Output)
+	if got != "hello" {
 		t.Fatalf("expected 'hello', got %q", result.Output)
 	}
 }
