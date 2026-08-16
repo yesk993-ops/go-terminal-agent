@@ -1,2 +1,9 @@
 .aider*
 /agent
+/agent.exe
+/ai-agent
+/ai-agent.exe
+/*-windows-*.exe
+/*-linux-*
+/*-darwin-*
+/dist/

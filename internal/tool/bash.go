@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 
@@ -21,7 +23,7 @@ func NewBashTool() core.Tool {
 func (t *bashTool) Name() string { return "bash" }
 
 func (t *bashTool) Description() string {
-	return "Execute a shell command and return the output. For destructive actions, user confirmation is required."
+	return "Execute a shell command and return the output. For destructive actions, user confirmation is required. On Windows uses cmd.exe (or PowerShell if available); on Unix uses sh."
 }
 
 func (t *bashTool) Schema() json.RawMessage {
@@ -41,12 +43,20 @@ func (t *bashTool) Schema() json.RawMessage {
 	}, []string{"command"})
 }
 
+// destructivePatterns covers both Unix and Windows destructive operations.
 var destructivePatterns = []string{
+	// Unix
 	"rm ", "/rm", "rm -rf", "rm -r", "rm -f", "rmdir", "dd ", "/dd", "mkfs", "format",
 	":(){ :|:& };:", "/dev/sd", "/dev/nvme", "/dev/mmcblk",
 	"chmod 0", "chmod 644 /", "chmod 777 /",
 	"chown ", "reboot", "shutdown", "poweroff", "halt",
 	">|", "sudo ", "sudo\t", "pkexec",
+	// Windows
+	"del /", "del /f", "del /s", "rd /s", "rmdir /s", "format ",
+	"diskpart", "remove-item ", "ri -recurse", "ri -r",
+	"clear-disk", "reset-computer", "stop-computer", "restart-computer",
+	"format-volume", "clear-content c:", "erase ",
+	"reg delete", "net user", "takeown ",
 }
 
 func isDestructive(cmd string) bool {
@@ -57,6 +67,35 @@ func isDestructive(cmd string) bool {
 		}
 	}
 	return false
+}
+
+// shellCommand returns the platform shell executable and the flag used to pass
+// a command string. Preference order on Windows:
+//  1. ComSpec (usually cmd.exe)
+//  2. powershell.exe
+//  3. pwsh.exe (PowerShell Core)
+//  4. bare "cmd"
+//
+// On Unix: sh -c
+func shellCommand(command string) (name string, args []string) {
+	if runtime.GOOS == "windows" {
+		// Prefer cmd.exe via ComSpec — always present on Windows.
+		if comspec := os.Getenv("ComSpec"); comspec != "" {
+			return comspec, []string{"/C", command}
+		}
+		// Fall back to PowerShell if ComSpec is unset (rare).
+		if pwsh, err := exec.LookPath("powershell.exe"); err == nil {
+			return pwsh, []string{"-NoProfile", "-NonInteractive", "-Command", command}
+		}
+		if pwsh, err := exec.LookPath("pwsh.exe"); err == nil {
+			return pwsh, []string{"-NoProfile", "-NonInteractive", "-Command", command}
+		}
+		if pwsh, err := exec.LookPath("pwsh"); err == nil {
+			return pwsh, []string{"-NoProfile", "-NonInteractive", "-Command", command}
+		}
+		return "cmd", []string{"/C", command}
+	}
+	return "sh", []string{"-c", command}
 }
 
 func (t *bashTool) Execute(ctx context.Context, args json.RawMessage) *core.ToolResult {
@@ -83,10 +122,8 @@ func (t *bashTool) Execute(ctx context.Context, args json.RawMessage) *core.Tool
 	cmdCtx, cancel := context.WithTimeout(ctx, time.Duration(params.Timeout)*time.Millisecond)
 	defer cancel()
 
-	shell := "sh"
-	flag := "-c"
-
-	cmd := exec.CommandContext(cmdCtx, shell, flag, params.Command)
+	shell, shellArgs := shellCommand(params.Command)
+	cmd := exec.CommandContext(cmdCtx, shell, shellArgs...)
 
 	if params.Workdir != "" {
 		cmd.Dir = params.Workdir

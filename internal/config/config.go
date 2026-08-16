@@ -1,7 +1,6 @@
 package config
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -58,17 +57,7 @@ func Load(path string) (*core.Config, error) {
 			v.AddConfigPath(path)
 		}
 	} else {
-		xdgConfig := os.Getenv("XDG_CONFIG_HOME")
-		if xdgConfig == "" {
-			xdgConfig = filepath.Join(os.Getenv("HOME"), ".config")
-		}
-		searchPaths := []string{
-			".",
-			filepath.Join(os.Getenv("HOME"), ".config", appName),
-			filepath.Join(xdgConfig, appName),
-			"/etc/" + appName,
-		}
-		for _, p := range searchPaths {
+		for _, p := range configSearchPaths() {
 			if p != "" {
 				v.AddConfigPath(p)
 			}
@@ -127,7 +116,7 @@ func loadProviderConfigs(v *viper.Viper) []core.ProviderConfig {
 		"openrouter": "OPENROUTER_API_KEY",
 	}
 
-	bashrcKeys := loadBashrcEnv()
+	shellKeys := loadShellEnv()
 
 	var configs []core.ProviderConfig
 
@@ -146,9 +135,9 @@ func loadProviderConfigs(v *viper.Viper) []core.ProviderConfig {
 			}
 		}
 
-		// Then .bashrc (user's explicit override).
+		// Then shell/profile files (bashrc, PowerShell profile, agent.env).
 		if apiKey == "" {
-			if k, ok := bashrcKeys[envKey]; ok && k != "" {
+			if k, ok := shellKeys[envKey]; ok && k != "" {
 				apiKey = k
 			}
 		}
@@ -177,51 +166,22 @@ func loadProviderConfigs(v *viper.Viper) []core.ProviderConfig {
 	return configs
 }
 
-func loadBashrcEnv() map[string]string {
-	keys := make(map[string]string)
-	home := os.Getenv("HOME")
-	if home == "" {
-		return keys
-	}
-	for _, name := range []string{".bashrc", ".zshrc", ".profile", ".bash_profile"} {
-		f, err := os.Open(filepath.Join(home, name))
-		if err != nil {
-			continue
-		}
-		scanner := bufio.NewScanner(f)
-		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			if !strings.HasPrefix(line, "export ") {
-				continue
-			}
-			line = strings.TrimPrefix(line, "export ")
-			parts := strings.SplitN(line, "=", 2)
-			if len(parts) != 2 {
-				continue
-			}
-			key := parts[0]
-			val := strings.Trim(parts[1], "\"' ")
-			keys[key] = val
-		}
-		f.Close()
-	}
-	return keys
-}
-
-func defaultSessionPath() string {
-	home := os.Getenv("HOME")
-	if home == "" {
-		return filepath.Join(os.TempDir(), appName, "sessions")
-	}
-	return filepath.Join(home, ".local", "share", appName)
-}
-
+// expandHomePath expands a leading "~" or "~/" (and "~\") to the user home
+// directory. Paths without a tilde are returned unchanged. On Windows this
+// correctly handles both forward and backslash separators.
 func expandHomePath(path string) string {
-	if path == "~" || len(path) > 2 && path[:2] == "~/" {
-		if home, err := os.UserHomeDir(); err == nil && home != "" {
-			if path == "~" {
-				return home
-			}
+	if path == "" {
+		return path
+	}
+	if path == "~" {
+		if home := userHome(); home != "" {
+			return home
+		}
+		return path
+	}
+	// "~/" (Unix) or "~\" (Windows)
+	if strings.HasPrefix(path, "~/") || strings.HasPrefix(path, `~\`) {
+		if home := userHome(); home != "" {
 			return filepath.Join(home, path[2:])
 		}
 	}
@@ -262,13 +222,14 @@ func ResolveAPIKey(providerName string, cfg *core.Config) string {
 		}
 	}
 
-	// 2. .bashrc — user's explicit config, overrides stale parent env.
-	bashrcKeys := loadBashrcEnv()
-	if k := bashrcKeys[envKeys[providerName]]; k != "" {
+	// 2. Shell / profile files — user's explicit config, overrides stale parent env.
+	//    On Windows this also reads PowerShell profiles and agent.env.
+	shellKeys := loadShellEnv()
+	if k := shellKeys[envKeys[providerName]]; k != "" {
 		return k
 	}
 	if providerName == "gemini" {
-		if k := bashrcKeys["GOOGLE_API_KEY"]; k != "" {
+		if k := shellKeys["GOOGLE_API_KEY"]; k != "" {
 			return k
 		}
 	}
